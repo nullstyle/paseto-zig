@@ -99,6 +99,15 @@ test "claims validator: exp/nbf/iat and custom audience" {
     try std.testing.expectError(paseto.Error.InvalidAudience, v2.validate(claims, allocator));
 }
 
+test "claims validator rejects malformed required claims" {
+    const allocator = std.testing.allocator;
+    const validator: paseto.Validator = .{
+        .require_issuer = true,
+        .now_override = 1_700_000_000,
+    };
+    try std.testing.expectError(paseto.Error.InvalidIssuer, validator.validate("{\"iss\":1}", allocator));
+}
+
 test "key round trip via PEM (v4.public seed)" {
     const allocator = std.testing.allocator;
     const pem =
