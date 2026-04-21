@@ -78,7 +78,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .all_step = fuzz_all_step,
     };
-    _ = fuzz_envelopes_step;
     _ = fuzz_scenarios_step;
 
     addFuzzHarness(fuzz_ctx, "token", "tests/fuzz/token.zig", fuzz_parsers_step);
@@ -86,6 +85,11 @@ pub fn build(b: *std.Build) void {
     addFuzzHarness(fuzz_ctx, "claims", "tests/fuzz/claims.zig", fuzz_parsers_step);
     addFuzzHarness(fuzz_ctx, "pem", "tests/fuzz/pem.zig", fuzz_parsers_step);
     addFuzzHarness(fuzz_ctx, "paserk_keys", "tests/fuzz/paserk_keys.zig", fuzz_parsers_step);
+
+    addFuzzHarness(fuzz_ctx, "paserk_pie", "tests/fuzz/paserk_pie.zig", fuzz_envelopes_step);
+    addFuzzHarness(fuzz_ctx, "paserk_pke", "tests/fuzz/paserk_pke.zig", fuzz_envelopes_step);
+    addFuzzHarness(fuzz_ctx, "paserk_pbkw", "tests/fuzz/paserk_pbkw.zig", fuzz_envelopes_step);
+    addFuzzHarness(fuzz_ctx, "paserk_id", "tests/fuzz/paserk_id.zig", fuzz_envelopes_step);
 }
 
 const FuzzCtx = struct {
