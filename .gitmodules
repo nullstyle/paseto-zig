@@ -1,0 +1,3 @@
+[submodule "vendor/ruby"]
+	path = vendor/ruby
+	url = git@github.com:bannable/paseto.git

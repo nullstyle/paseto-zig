@@ -1,0 +1,15 @@
+.{
+    .name = .paseto,
+    .version = "0.1.0",
+    .fingerprint = 0xbf7a341de53d1210,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "tests",
+        "README.md",
+        "LICENSE.txt",
+    },
+    .dependencies = .{},
+}
