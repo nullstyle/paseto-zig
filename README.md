@@ -188,6 +188,69 @@ The PBKW argon2id vectors dominate wall-clock runtime; when iterating on
 unrelated changes use `zig build unit` or `zig build e2e` for fast feedback
 and only run `zig build test` before committing.
 
+## Fuzzing
+
+Thirteen harnesses plus a cross-module scenario harness live under
+`tests/fuzz/`, covering the parser surface (token, util codecs, claims,
+PEM/DER, PASERK keys), the envelope surface (PIE, PKE, PBKW, PASERK IDs,
+all four high-level `v3/v4.Local`/`.Public` APIs), and a bounded scenario
+grammar with ten families (round-trip, mutation-reject, mixed-version and
+mixed-purpose misuse).
+
+Group steps:
+
+```sh
+zig build fuzz-all         # full suite — runs every harness once per seed
+zig build fuzz-parsers     # parser harnesses only
+zig build fuzz-envelopes   # envelope + high-level API harnesses
+zig build fuzz-scenarios   # scenario grammar harness only
+```
+
+Per-harness targets for focused repro after a crash:
+
+```sh
+zig build fuzz-token
+zig build fuzz-util
+zig build fuzz-claims
+zig build fuzz-pem
+zig build fuzz-paserk_keys
+zig build fuzz-paserk_pie
+zig build fuzz-paserk_pke
+zig build fuzz-paserk_pbkw
+zig build fuzz-paserk_id
+zig build fuzz-v4_local
+zig build fuzz-v4_public
+zig build fuzz-v3_local
+zig build fuzz-v3_public
+zig build fuzz-scenario
+```
+
+### Current mode: seed-only
+
+Stock Zig `0.16.0` has a defect in `lib/compiler/test_runner.zig` (a
+`*builtin.StackTrace` vs `*const debug.StackTrace` mismatch in the fuzz
+error path) that blocks `-ffuzz` at comptime. The harnesses therefore run
+**seed-only**: each harness executes its embedded `@embedFile` corpus once
+per invocation. When upstream Zig ships a fix, `zig build <step> --fuzz[=limit]`
+and `--webui` become available with zero harness changes.
+
+### Corpus and regression policy
+
+* Seed corpora live at `tests/fuzz/corpus/<harness>/*.bin`. Keep hand-curated
+  seeds small (~3–10 files per harness); bulk growth is the fuzz engine's
+  job once generative mode returns.
+* Any reproducible crash found during a long run becomes either a permanent
+  corpus seed under `tests/fuzz/corpus/<harness>/` or a deterministic
+  regression input under `tests/fuzz/regressions/<harness>/`, then wired
+  into the harness's seed list via `@embedFile`.
+* Each harness's allowed-error set is locked by the spec's rejection
+  contract. An error outside that set is a bug, not a license to broaden
+  the set.
+* PBKW harnesses use bounded Argon2 parameters from
+  `tests/fuzz/support.zig` (`PbkwV4FuzzParams` / `PbkwV3FuzzParams`) so
+  iterations stay cheap. Do not fuzz `memlimit_bytes` or `opslimit`
+  directly except through the explicit `WeakParameters` negative test.
+
 ## Contributing
 
 1. Install Zig `0.16.0`.
@@ -200,6 +263,9 @@ and only run `zig build test` before committing.
    against the upstream Ruby implementation's feature set.
 3. Make your change. Prefer narrowly-scoped commits with their own tests.
 4. Run `zig build test` and ensure the full suite is green before pushing.
+5. If your change touches parser / envelope / high-level code that already
+   has a fuzz harness, also run `zig build fuzz-all` seed-only before
+   pushing.
 
 ## Acknowledgements
 
