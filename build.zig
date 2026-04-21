@@ -78,8 +78,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .all_step = fuzz_all_step,
     };
-    _ = fuzz_scenarios_step;
-
     addFuzzHarness(fuzz_ctx, "token", "tests/fuzz/token.zig", fuzz_parsers_step);
     addFuzzHarness(fuzz_ctx, "util", "tests/fuzz/util.zig", fuzz_parsers_step);
     addFuzzHarness(fuzz_ctx, "claims", "tests/fuzz/claims.zig", fuzz_parsers_step);
@@ -95,6 +93,8 @@ pub fn build(b: *std.Build) void {
     addFuzzHarness(fuzz_ctx, "v4_public", "tests/fuzz/v4_public.zig", fuzz_envelopes_step);
     addFuzzHarness(fuzz_ctx, "v3_local", "tests/fuzz/v3_local.zig", fuzz_envelopes_step);
     addFuzzHarness(fuzz_ctx, "v3_public", "tests/fuzz/v3_public.zig", fuzz_envelopes_step);
+
+    addFuzzHarness(fuzz_ctx, "scenario", "tests/fuzz/scenarios.zig", fuzz_scenarios_step);
 }
 
 const FuzzCtx = struct {
