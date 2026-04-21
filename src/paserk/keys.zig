@@ -60,8 +60,12 @@ fn writeKeyPaserk(
     return out;
 }
 
-/// Decoded PASERK carrying its version/type and raw bytes. Caller owns
-/// `bytes` and must free it via `deinit`.
+/// Decoded PASERK carrying its version/type and raw bytes.
+///
+/// Ownership model:
+/// * Call `deinit` exactly once when done.
+/// * Do not copy the struct by value and keep both copies alive across
+///   `deinit`; both copies would share the same heap allocation.
 pub const Decoded = struct {
     version: Version,
     kind: KeyType,
@@ -69,6 +73,39 @@ pub const Decoded = struct {
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Decoded) void {
+        self.allocator.free(self.bytes);
+        self.* = undefined;
+    }
+};
+
+/// Subset of `KeyType` that covers what a wrapping operation can produce.
+/// Used by both PIE (`local-wrap` / `secret-wrap`) and PBKW (`local-pw` /
+/// `secret-pw`), which never emit a bare public key.
+pub const WrappedKind = enum {
+    local,
+    secret,
+
+    pub fn toKeyType(self: WrappedKind) KeyType {
+        return switch (self) {
+            .local => .local,
+            .secret => .secret,
+        };
+    }
+};
+
+/// Output of a PASERK wrap/unwrap operation. Used by both `pie` and `pbkw`.
+///
+/// Ownership model:
+/// * Call `deinit` exactly once when done.
+/// * Do not copy the struct by value and keep both copies alive across
+///   `deinit`; both copies would share the same heap allocation.
+pub const UnwrappedKey = struct {
+    version: Version,
+    kind: WrappedKind,
+    bytes: []u8,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *UnwrappedKey) void {
         self.allocator.free(self.bytes);
         self.* = undefined;
     }

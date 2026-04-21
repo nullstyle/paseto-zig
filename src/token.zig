@@ -54,7 +54,17 @@ pub const Purpose = enum {
 };
 
 /// A parsed PASETO in raw form. `payload` and `footer` are freshly-allocated
-/// buffers owned by this `Token` and must be freed with `deinit`.
+/// buffers owned by this `Token`.
+///
+/// Ownership model:
+/// * Call `deinit` exactly once when you are done with the token.
+/// * Do **not** copy a `Token` by value and call `deinit` on both copies —
+///   the slices point at the same heap memory, so the second `deinit` is a
+///   double-free. Pass `*Token` or `*const Token` around instead.
+/// * Do **not** keep other references to `payload` or `footer` alive past
+///   `deinit`; those slices are freed.
+/// * After `deinit` the struct is set to `undefined` so subsequent reads
+///   trip Debug-mode safety checks.
 pub const Token = struct {
     version: Version,
     purpose: Purpose,

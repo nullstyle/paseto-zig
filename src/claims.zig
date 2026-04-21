@@ -3,6 +3,12 @@ const errors = @import("errors.zig");
 
 pub const Error = errors.Error;
 
+/// Owner of a heap-allocated claims JSON buffer.
+///
+/// Ownership model:
+/// * Call `deinit` exactly once when done.
+/// * Do not copy the struct by value and keep both copies alive across
+///   `deinit`; both would reference the same heap allocation.
 pub const Claims = struct {
     json: []const u8,
     allocator: std.mem.Allocator,
@@ -26,6 +32,13 @@ pub const Claims = struct {
     }
 };
 
+/// Result of a high-level decode operation: the plaintext claims bytes plus
+/// the raw footer.
+///
+/// Ownership model:
+/// * Call `deinit` exactly once when done.
+/// * Do not copy the struct by value and keep both copies alive across
+///   `deinit`; the two slices point at shared heap memory.
 pub const Result = struct {
     claims_bytes: []u8,
     footer: []u8,

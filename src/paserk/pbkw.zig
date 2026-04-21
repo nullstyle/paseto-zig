@@ -5,6 +5,7 @@ const std = @import("std");
 const util = @import("../util.zig");
 const errors = @import("../errors.zig");
 const token_mod = @import("../token.zig");
+const keys = @import("keys.zig");
 
 pub const Error = errors.Error;
 pub const Version = token_mod.Version;
@@ -20,7 +21,9 @@ const argon2 = std.crypto.pwhash.argon2;
 const DOMAIN_SEPARATOR_ENCRYPT: u8 = 0xFF;
 const DOMAIN_SEPARATOR_AUTH: u8 = 0xFE;
 
-pub const Kind = enum { local, secret };
+/// Re-export of the shared `WrappedKind` so existing callers that address
+/// PBKW-specific types directly keep working.
+pub const Kind = keys.WrappedKind;
 
 pub const V4Params = struct {
     memlimit_bytes: u64,
@@ -136,17 +139,9 @@ pub fn wrapV3(
     return try encodePaserk(allocator, header, body);
 }
 
-pub const Unwrapped = struct {
-    version: Version,
-    kind: Kind,
-    bytes: []u8,
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *Unwrapped) void {
-        self.allocator.free(self.bytes);
-        self.* = undefined;
-    }
-};
+/// Re-export of `paserk.keys.UnwrappedKey` so `paseto.paserk.pbkw.Unwrapped`
+/// continues to resolve for existing callers.
+pub const Unwrapped = keys.UnwrappedKey;
 
 pub fn unwrap(
     allocator: std.mem.Allocator,

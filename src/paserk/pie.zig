@@ -19,7 +19,9 @@ const DOMAIN_SEPARATOR_ENCRYPT: u8 = 0x80;
 
 const nonce_bytes = 32;
 
-pub const Kind = enum { local, secret };
+/// Re-export of the shared `WrappedKind` for backward compatibility with
+/// callers that address PIE-specific types directly.
+pub const Kind = keys.WrappedKind;
 
 pub const WrapOptions = struct {
     /// Deterministic nonce for test vectors. Production code should leave
@@ -79,17 +81,9 @@ pub fn wrap(
     return out;
 }
 
-pub const Unwrapped = struct {
-    version: Version,
-    kind: Kind,
-    bytes: []u8,
-    allocator: std.mem.Allocator,
-
-    pub fn deinit(self: *Unwrapped) void {
-        self.allocator.free(self.bytes);
-        self.* = undefined;
-    }
-};
+/// Re-export of `paserk.keys.UnwrappedKey` so `paseto.paserk.pie.Unwrapped`
+/// continues to resolve for existing callers.
+pub const Unwrapped = keys.UnwrappedKey;
 
 pub fn unwrap(
     allocator: std.mem.Allocator,

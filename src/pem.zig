@@ -20,6 +20,12 @@ pub const KeyFormat = enum {
     p384_public_compressed,
 };
 
+/// Raw primitive bytes extracted from a PEM document.
+///
+/// Ownership model:
+/// * Call `deinit` exactly once when done.
+/// * Do not copy the struct by value and keep both copies alive across
+///   `deinit`; the two copies would share a heap allocation.
 pub const Parsed = struct {
     format: KeyFormat,
     bytes: []u8,
