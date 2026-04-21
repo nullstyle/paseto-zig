@@ -111,6 +111,7 @@ pub fn wrapV3(
     opts: WrapOptionsV3,
 ) ![]u8 {
     try validatePtk(.v3, kind, ptk.len);
+    try validateV3Params(opts.params);
 
     var salt: [32]u8 = undefined;
     var nonce: [16]u8 = undefined;
@@ -237,6 +238,7 @@ fn unwrapV3(
     try validatePtk(.v3, kind, edk.len);
 
     const params: V3Params = .{ .iterations = iterations };
+    try validateV3Params(params);
 
     var pre_key: [32]u8 = undefined;
     pbkdf2(&pre_key, password, salt, iterations, HmacSha384) catch
@@ -255,6 +257,24 @@ fn unwrapV3(
     return .{ .version = .v3, .kind = kind, .bytes = out, .allocator = allocator };
 }
 
+fn validateV4Params(params: V4Params) !void {
+    // PASERK fixes the Argon2 parallelism factor at 1; any other value is
+    // a caller error.
+    if (params.para != 1) return Error.WeakParameters;
+    if (params.opslimit == 0) return Error.WeakParameters;
+    // Argon2 measures memory in KiB, and the PASERK wire format records the
+    // memlimit as bytes. Round-trip requires the caller's bytes value to be
+    // an exact multiple of 1024; otherwise the wrapped + unwrapped inputs
+    // would disagree after truncation.
+    if (params.memlimit_bytes < 1024) return Error.WeakParameters;
+    if (params.memlimit_bytes % 1024 != 0) return Error.WeakParameters;
+    if (params.memlimit_bytes / 1024 > std.math.maxInt(u32)) return Error.WeakParameters;
+}
+
+fn validateV3Params(params: V3Params) !void {
+    if (params.iterations == 0) return Error.WeakParameters;
+}
+
 fn argon2id(
     allocator: std.mem.Allocator,
     out: []u8,
@@ -262,6 +282,7 @@ fn argon2id(
     salt: []const u8,
     params: V4Params,
 ) !void {
+    try validateV4Params(params);
     const memory_kib: u32 = @intCast(params.memlimit_bytes / 1024);
     const argon_params: argon2.Params = .{
         .t = params.opslimit,
@@ -270,9 +291,15 @@ fn argon2id(
     };
     const io = std.Io.Threaded.global_single_threaded.io();
     argon2.kdf(allocator, out, password, salt, argon_params, .argon2id, io) catch |err| switch (err) {
+        // Caller-parameter mistakes that slip past our pre-checks stay as
+        // WeakParameters.
         error.WeakParameters => return Error.WeakParameters,
         error.OutputTooLong => return Error.WeakParameters,
         error.Canceled => return Error.Canceled,
+        // Any other Argon2 runtime failure (e.g. out-of-memory for large
+        // memlimits) is collapsed into Error.OutOfMemory: the public error
+        // set does not currently distinguish them, and widening it is out
+        // of scope for this hardening pass.
         else => return Error.OutOfMemory,
     };
 }
@@ -434,4 +461,76 @@ fn encodePaserk(allocator: std.mem.Allocator, header: []const u8, body: []const 
     out[header.len] = '.';
     _ = util.encodeBase64(out[header.len + 1 ..][0..encoded_len], body);
     return out;
+}
+
+test "wrapV4 rejects non-KiB-aligned memlimit_bytes" {
+    const allocator = std.testing.allocator;
+    const key = [_]u8{0x11} ** 32;
+    try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
+        .params = .{ .memlimit_bytes = 1500, .opslimit = 2 },
+        .salt = [_]u8{0x22} ** 16,
+        .nonce = [_]u8{0x33} ** 24,
+    }));
+}
+
+test "wrapV4 rejects memlimit_bytes below 1 KiB" {
+    const allocator = std.testing.allocator;
+    const key = [_]u8{0x11} ** 32;
+    try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
+        .params = .{ .memlimit_bytes = 512, .opslimit = 2 },
+        .salt = [_]u8{0x22} ** 16,
+        .nonce = [_]u8{0x33} ** 24,
+    }));
+}
+
+test "wrapV4 rejects zero opslimit" {
+    const allocator = std.testing.allocator;
+    const key = [_]u8{0x11} ** 32;
+    try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
+        .params = .{ .memlimit_bytes = 64 * 1024 * 1024, .opslimit = 0 },
+        .salt = [_]u8{0x22} ** 16,
+        .nonce = [_]u8{0x33} ** 24,
+    }));
+}
+
+test "wrapV4 rejects parallelism != 1" {
+    const allocator = std.testing.allocator;
+    const key = [_]u8{0x11} ** 32;
+    try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
+        .params = .{ .memlimit_bytes = 64 * 1024 * 1024, .opslimit = 2, .para = 2 },
+        .salt = [_]u8{0x22} ** 16,
+        .nonce = [_]u8{0x33} ** 24,
+    }));
+}
+
+test "wrapV3 rejects zero iterations" {
+    const allocator = std.testing.allocator;
+    const key = [_]u8{0x11} ** 32;
+    try std.testing.expectError(Error.WeakParameters, wrapV3(allocator, .local, "pw", &key, .{
+        .params = .{ .iterations = 0 },
+        .salt = [_]u8{0x22} ** 32,
+        .nonce = [_]u8{0x33} ** 16,
+    }));
+}
+
+test "unwrap rejects non-KiB-aligned memlimit from malicious paserk" {
+    const allocator = std.testing.allocator;
+    // Hand-craft a body with memlimit_bytes = 1500 so decoding must bail
+    // before running Argon2.
+    var body: [16 + 8 + 4 + 4 + 24 + 32 + 32]u8 = undefined;
+    @memset(&body, 0);
+    const memlimit_be = util.be64(1500);
+    @memcpy(body[16..24], &memlimit_be);
+    const opslimit_be = util.be32(2);
+    @memcpy(body[24..28], &opslimit_be);
+    const para_be = util.be32(1);
+    @memcpy(body[28..32], &para_be);
+
+    const encoded_len = util.encodedBase64Len(body.len);
+    const paserk = try allocator.alloc(u8, "k4.local-pw.".len + encoded_len);
+    defer allocator.free(paserk);
+    @memcpy(paserk[0.."k4.local-pw.".len], "k4.local-pw.");
+    _ = util.encodeBase64(paserk["k4.local-pw.".len..][0..encoded_len], &body);
+
+    try std.testing.expectError(Error.WeakParameters, unwrap(allocator, "pw", paserk));
 }
