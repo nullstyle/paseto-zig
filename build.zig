@@ -57,4 +57,60 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_vectors_tests.step);
     test_step.dependOn(&run_e2e_tests.step);
+
+    // -- Fuzz suite ------------------------------------------------------
+    //
+    // Every harness is registered via `addFuzzHarness`, which attaches the
+    // harness to its group step, the aggregate `fuzz-all` step, and a
+    // dedicated `fuzz-<name>` step so developers can target one harness at
+    // a time. Harnesses run seed-only today — Zig 0.16.0's stdlib test
+    // runner fails to compile with `-ffuzz`, so `--fuzz` is blocked until
+    // upstream patches that.
+    const fuzz_all_step = b.step("fuzz-all", "Run the full fuzz suite (seed-only)");
+    const fuzz_parsers_step = b.step("fuzz-parsers", "Run parser-group fuzz harnesses");
+    const fuzz_envelopes_step = b.step("fuzz-envelopes", "Run envelope-group fuzz harnesses");
+    const fuzz_scenarios_step = b.step("fuzz-scenarios", "Run scenario-group fuzz harnesses");
+
+    const fuzz_ctx: FuzzCtx = .{
+        .b = b,
+        .paseto_mod = paseto_mod,
+        .target = target,
+        .optimize = optimize,
+        .all_step = fuzz_all_step,
+    };
+    _ = fuzz_parsers_step;
+    _ = fuzz_envelopes_step;
+    _ = fuzz_scenarios_step;
+
+    // Placeholder harness keeps the module graph compiling before Task 2.
+    addFuzzHarness(fuzz_ctx, "placeholder", "tests/fuzz/_placeholder.zig", fuzz_all_step);
+}
+
+const FuzzCtx = struct {
+    b: *std.Build,
+    paseto_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    all_step: *std.Build.Step,
+};
+
+fn addFuzzHarness(
+    ctx: FuzzCtx,
+    comptime name: []const u8,
+    comptime rel_path: []const u8,
+    group_step: *std.Build.Step,
+) void {
+    const mod = ctx.b.createModule(.{
+        .root_source_file = ctx.b.path(rel_path),
+        .target = ctx.target,
+        .optimize = ctx.optimize,
+    });
+    mod.addImport("paseto", ctx.paseto_mod);
+    const t = ctx.b.addTest(.{ .root_module = mod });
+    const run = ctx.b.addRunArtifact(t);
+    group_step.dependOn(&run.step);
+    if (group_step != ctx.all_step) ctx.all_step.dependOn(&run.step);
+
+    const own = ctx.b.step("fuzz-" ++ name, "Run the " ++ name ++ " fuzz harness");
+    own.dependOn(&run.step);
 }

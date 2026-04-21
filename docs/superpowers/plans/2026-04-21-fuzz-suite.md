@@ -8,6 +8,8 @@
 
 **Tech Stack:** Zig `0.16.0`, `std.testing.fuzz`, `std.testing.Smith`, `std.Build` module with `.fuzz = null` (toolchain follows `--fuzz`), `@embedFile` for seed corpora, PASETO/PASERK test vectors already present in `tests/vectors/*.json`.
 
+**Known platform blocker on stock Zig 0.16.0 (2026-04-21):** `-ffuzz` currently fails to compile the stdlib test runner because `@errorReturnTrace()` returns `*builtin.StackTrace` but `std.debug.writeStackTrace` in 0.16.0 expects `*const debug.StackTrace` (same name, different types). This is a 0.16.0-only defect at `/lib/compiler/test_runner.zig:566`. Decision (2026-04-21): land the **entire** plan in seed-only mode — every harness uses `std.testing.fuzz(..., .{ .corpus = &seeds })` and runs its embedded corpus once per invocation. Generative fuzzing turns on automatically the day either (a) Zig patches the test runner, or (b) a user opts into a forked test_runner. Do not add `--fuzz` invocations to task verification steps; replace them with plain seed-only `zig build fuzz-*` runs.
+
 ---
 
 ## Context Snapshot
@@ -99,7 +101,7 @@ Each task verifies via `zig build fuzz-all` (no `--fuzz`, seed-only) before comm
 - Create: `tests/fuzz/regressions/.gitkeep`
 - Modify: `build.zig`
 
-- [ ] **Step 1: Confirm the Zig fuzz toolchain works on the developer box**
+- [ ] **Step 1: Confirm seed-only fuzz compiles**
 
 Write a throwaway harness at `tests/fuzz/_smoke.zig`:
 
@@ -117,13 +119,9 @@ test "fuzz toolchain smoke" {
 
 Run: `zig test tests/fuzz/_smoke.zig`
 
-Expected: passes immediately (no corpus → no iterations in seed-only mode).
+Expected: passes (seed-only; empty corpus means zero iterations). Delete `_smoke.zig` after this check.
 
-Run: `zig test tests/fuzz/_smoke.zig -ffuzz`
-
-Expected: the runtime panics with "fuzz test requires server" — this is correct and proves `-ffuzz` links the instrumentation path. Delete `_smoke.zig` after this check.
-
-If `-ffuzz` fails to compile on this platform, STOP and surface the platform limitation to the user before continuing.
+Do NOT attempt `-ffuzz` on stock Zig 0.16.0 — it fails at comptime due to the known stdlib test_runner defect documented above. The seed-only mode is the targeted build mode for this plan.
 
 - [ ] **Step 2: Create `tests/fuzz/support.zig`**
 
@@ -377,27 +375,13 @@ zig build fuzz-parsers
 
 Expected: all pass.
 
-- [ ] **Step 9: Short bounded fuzz spike**
-
-Run a short real-fuzz spike (≤ 60s wall-clock) per harness to catch obvious panics early:
-
-```
-zig build fuzz-token --fuzz=100K
-zig build fuzz-util --fuzz=100K
-zig build fuzz-claims --fuzz=100K
-zig build fuzz-pem --fuzz=100K
-zig build fuzz-paserk_keys --fuzz=100K
-```
-
-If a crash appears: minimize, drop into `tests/fuzz/regressions/<harness>/`, wire it into the harness's `@embedFile` seed list, and then re-run until green.
-
-- [ ] **Step 10: Full-suite verification**
+- [ ] **Step 9: Full-suite verification**
 
 Run: `zig build test && zig build fuzz-all`
 
 Expected: both green.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add tests/fuzz/token.zig tests/fuzz/util.zig tests/fuzz/claims.zig tests/fuzz/pem.zig tests/fuzz/paserk_keys.zig tests/fuzz/corpus/ tests/fuzz/regressions/ build.zig
@@ -471,7 +455,7 @@ zig build fuzz-envelopes
 zig build fuzz-all
 ```
 
-Expected: all pass seed-only. Then run a 30–60s spike per harness with `--fuzz=30K` (keep PBKW iteration count low because each Argon2 call is slow).
+Expected: all pass seed-only (generative fuzz is blocked by the 0.16.0 test-runner defect).
 
 - [ ] **Step 8: Commit**
 
@@ -534,7 +518,7 @@ zig build fuzz-v3_public
 zig build fuzz-envelopes
 ```
 
-Then spike each with `--fuzz=100K` for ≤ 60s. Promote any crash to a regression seed before ending the task.
+Seed-only green is the bar until the 0.16.0 test-runner defect clears.
 
 - [ ] **Step 8: Commit**
 
@@ -658,7 +642,7 @@ zig build fuzz-scenarios
 zig build fuzz-all
 ```
 
-Seed-only green. Then run `zig build fuzz-scenarios --fuzz=30K` for ≤ 60s to sanity-check the dispatch.
+Seed-only green (generative fuzz blocked by 0.16.0 test-runner defect).
 
 - [ ] **Step 9: Commit**
 
@@ -703,17 +687,7 @@ fuzz-util        ...
 
 Adjust descriptions if any feel stale.
 
-- [ ] **Step 3: Optional: smoke a 10-minute full-suite fuzz run**
-
-Not required to land the task, but strongly encouraged on the implementer's local box:
-
-```
-zig build fuzz-all --fuzz=10M
-```
-
-If it crashes, triage using the existing regression policy in Step 1 before committing.
-
-- [ ] **Step 4: Final verification**
+- [ ] **Step 3: Final verification**
 
 ```
 zig build test
@@ -722,7 +696,7 @@ zig build fuzz-all
 
 Both green.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add README.md build.zig .gitignore
