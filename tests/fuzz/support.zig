@@ -148,10 +148,10 @@ pub fn expectAllowed(err: anyerror, allowed: []const paseto.Error) !void {
 /// Convenience: the subset of errors any token-shaped parser is allowed to
 /// emit. Used by multiple harnesses that consume external PASETO strings.
 pub const token_parse_errors = [_]paseto.Error{
-    .InvalidToken,
-    .UnsupportedVersion,
-    .UnsupportedPurpose,
-    .InvalidBase64,
-    .InvalidPadding,
-    .OutOfMemory,
+    error.InvalidToken,
+    error.UnsupportedVersion,
+    error.UnsupportedPurpose,
+    error.InvalidBase64,
+    error.InvalidPadding,
+    error.OutOfMemory,
 };

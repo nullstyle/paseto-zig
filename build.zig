@@ -78,12 +78,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .all_step = fuzz_all_step,
     };
-    _ = fuzz_parsers_step;
     _ = fuzz_envelopes_step;
     _ = fuzz_scenarios_step;
 
-    // Placeholder harness keeps the module graph compiling before Task 2.
-    addFuzzHarness(fuzz_ctx, "placeholder", "tests/fuzz/_placeholder.zig", fuzz_all_step);
+    addFuzzHarness(fuzz_ctx, "token", "tests/fuzz/token.zig", fuzz_parsers_step);
+    addFuzzHarness(fuzz_ctx, "util", "tests/fuzz/util.zig", fuzz_parsers_step);
+    addFuzzHarness(fuzz_ctx, "claims", "tests/fuzz/claims.zig", fuzz_parsers_step);
+    addFuzzHarness(fuzz_ctx, "pem", "tests/fuzz/pem.zig", fuzz_parsers_step);
+    addFuzzHarness(fuzz_ctx, "paserk_keys", "tests/fuzz/paserk_keys.zig", fuzz_parsers_step);
 }
 
 const FuzzCtx = struct {
