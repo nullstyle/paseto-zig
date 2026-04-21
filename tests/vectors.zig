@@ -51,6 +51,11 @@ test "PASETO v4 vectors" {
     defer parsed.deinit();
     const root = parsed.value.object;
     const tests = root.get("tests").?.array;
+    try std.testing.expect(tests.items.len > 0);
+
+    var seen_local: usize = 0;
+    var seen_public: usize = 0;
+    var seen_fail: usize = 0;
     for (tests.items) |test_val| {
         const t = test_val.object;
         const name = t.get("name").?.string;
@@ -61,12 +66,21 @@ test "PASETO v4 vectors" {
 
         if (std.mem.startsWith(u8, name, "4-E-")) {
             try runV4Local(allocator, name, t, token, footer, implicit_assertion, expect_fail);
+            seen_local += 1;
         } else if (std.mem.startsWith(u8, name, "4-S-")) {
             try runV4Public(allocator, name, t, token, footer, implicit_assertion, expect_fail);
+            seen_public += 1;
         } else if (std.mem.startsWith(u8, name, "4-F-")) {
             try runV4Fail(allocator, name, t, token, footer, implicit_assertion);
+            seen_fail += 1;
+        } else {
+            std.debug.print("unrecognized v4 vector: {s}\n", .{name});
+            return error.VectorFailed;
         }
     }
+    try std.testing.expect(seen_local > 0);
+    try std.testing.expect(seen_public > 0);
+    try std.testing.expect(seen_fail > 0);
 }
 
 test "PASERK pbkw vectors" {
@@ -82,10 +96,13 @@ test "PASERK pbkw vectors" {
         .{ .path = "tests/vectors/k3.secret-pw.json", .version = .v3, .kind = .secret },
     };
 
+    var total_processed: usize = 0;
     for (cases) |c| {
         var parsed = try readVectorFile(allocator, c.path);
         defer parsed.deinit();
         const tests = parsed.value.object.get("tests").?.array;
+        try std.testing.expect(tests.items.len > 0);
+        var processed: usize = 0;
         for (tests.items) |tv| {
             const t = tv.object;
             const name = t.get("name").?.string;
@@ -93,16 +110,32 @@ test "PASERK pbkw vectors" {
             const password = t.get("password").?.string;
             const paserk_val = t.get("paserk").?;
             const unwrapped_val = t.get("unwrapped").?;
-            if (paserk_val != .string) continue;
+            // An expect-fail vector with a null paserk is expressing
+            // "caller cannot even construct this input" — we treat the
+            // absence of a paserk as a pass, but assert the shape is
+            // consistent.
+            if (paserk_val == .null) {
+                try std.testing.expect(expect_fail);
+                processed += 1;
+                continue;
+            }
+            if (paserk_val != .string) {
+                std.debug.print("{s}: paserk is not string-or-null\n", .{name});
+                return error.VectorFailed;
+            }
 
             const result = paseto.paserk.pbkw.unwrap(allocator, password, paserk_val.string);
             if (result) |r_val| {
                 var r = r_val;
                 defer r.deinit();
-                // Reject wrong-version PASERKs.
+                // Reject wrong-version PASERKs by treating a mismatch as an
+                // intentional "wrong version" negative case.
                 const matches = r.version == c.version and r.kind == c.kind;
                 if (expect_fail) {
-                    if (!matches) continue;
+                    if (!matches) {
+                        processed += 1;
+                        continue;
+                    }
                     std.debug.print("{s}: unexpectedly unwrapped\n", .{name});
                     try std.testing.expect(false);
                 }
@@ -121,8 +154,12 @@ test "PASERK pbkw vectors" {
                     return err;
                 }
             }
+            processed += 1;
         }
+        try std.testing.expectEqual(tests.items.len, processed);
+        total_processed += processed;
     }
+    try std.testing.expect(total_processed > 0);
 }
 
 test "PASERK seal vectors v4" {
@@ -130,6 +167,9 @@ test "PASERK seal vectors v4" {
     var parsed = try readVectorFile(allocator, "tests/vectors/k4.seal.json");
     defer parsed.deinit();
     const tests = parsed.value.object.get("tests").?.array;
+    try std.testing.expect(tests.items.len > 0);
+
+    var processed: usize = 0;
     for (tests.items) |tv| {
         const t = tv.object;
         const name = t.get("name").?.string;
@@ -138,21 +178,30 @@ test "PASERK seal vectors v4" {
         const unsealed_val = t.get("unsealed").?;
         const sk_hex = t.get("sealing-secret-key").?.string;
 
-        // Two forms of sealing-secret-key appear: either 64-byte raw (seed||public)
-        // or a PEM-encoded form. Only the raw form is used in v4 vectors.
-        if (sk_hex.len != 128) continue; // skip PEM cases
+        // v4 vectors always carry a 64-byte raw Ed25519 secret key (128 hex
+        // chars). If we ever see a PEM-encoded variant here it's either a
+        // spec change or a typo — fail loudly so we don't silently skip.
+        if (sk_hex.len != 128) {
+            std.debug.print("{s}: unexpected v4 sealing-secret-key shape len={d}\n", .{ name, sk_hex.len });
+            return error.VectorFailed;
+        }
         const sk_bytes = try hexToArr(sk_hex, 64);
 
-        if (paserk_val != .string) continue;
+        if (paserk_val != .string) {
+            std.debug.print("{s}: paserk is not a string\n", .{name});
+            return error.VectorFailed;
+        }
         if (!std.mem.startsWith(u8, paserk_val.string, "k4.seal.")) {
-            // wrong-version vector: attempting to unseal a k3 paserk with k4 key
-            // should fail.
+            // Wrong-version vector (expect_fail must be true): unsealing
+            // with a v4 key must refuse a k3 paserk.
+            try std.testing.expect(expect_fail);
             const result = paseto.paserk.pke.unsealV4FromSecretKey(allocator, sk_bytes, paserk_val.string);
             if (result) |r| {
                 allocator.free(r);
                 std.debug.print("{s}: unexpectedly unsealed wrong-version\n", .{name});
                 try std.testing.expect(false);
             } else |_| {}
+            processed += 1;
             continue;
         }
 
@@ -174,7 +223,9 @@ test "PASERK seal vectors v4" {
                 return err;
             }
         }
+        processed += 1;
     }
+    try std.testing.expectEqual(tests.items.len, processed);
 }
 
 test "PASERK seal vectors v3" {
@@ -182,6 +233,9 @@ test "PASERK seal vectors v3" {
     var parsed = try readVectorFile(allocator, "tests/vectors/k3.seal.json");
     defer parsed.deinit();
     const tests = parsed.value.object.get("tests").?.array;
+    try std.testing.expect(tests.items.len > 0);
+
+    var processed: usize = 0;
     for (tests.items) |tv| {
         const t = tv.object;
         const name = t.get("name").?.string;
@@ -190,8 +244,12 @@ test "PASERK seal vectors v3" {
         const unsealed_val = t.get("unsealed").?;
         const sk_text = t.get("sealing-secret-key").?.string;
 
-        // v3 may provide a PEM or raw 64-char hex (single scalar). The Ruby
-        // vectors use PEM for k3.seal*, so parse that.
+        // v3 vectors provide one of three shapes for sealing-secret-key:
+        //   * PEM (P-384 EC private key) — the canonical success input
+        //   * 96-char hex (raw 48-byte P-384 scalar)
+        //   * 128-char hex (raw Ed25519 secret key) — wrong-version vectors
+        //     only; we must refuse to unseal their (k4.seal) paserk with a
+        //     v3 API.
         var scalar: [48]u8 = undefined;
         if (std.mem.startsWith(u8, sk_text, "-----BEGIN")) {
             var pem_parsed = try paseto.pem.parse(allocator, sk_text);
@@ -200,22 +258,33 @@ test "PASERK seal vectors v3" {
             @memcpy(&scalar, pem_parsed.bytes);
         } else if (sk_text.len == 96) {
             scalar = try hexToArr(sk_text, 48);
-        } else {
-            // wrong-version vector (v4 secret); just test unseal rejection
-            if (paserk_val == .string and !std.mem.startsWith(u8, paserk_val.string, "k3.seal.")) {
-                continue;
-            }
+        } else if (sk_text.len == 128) {
+            // v4 secret key provided; the vector's paserk must be a k4
+            // seal that the v3 API can't even open. We document that here
+            // and skip the scalar-driven unseal path.
+            try std.testing.expect(expect_fail);
+            try std.testing.expect(paserk_val == .string);
+            try std.testing.expect(!std.mem.startsWith(u8, paserk_val.string, "k3.seal."));
+            processed += 1;
             continue;
+        } else {
+            std.debug.print("{s}: unrecognized sealing-secret-key shape\n", .{name});
+            return error.VectorFailed;
         }
 
-        if (paserk_val != .string) continue;
+        if (paserk_val != .string) {
+            std.debug.print("{s}: paserk is not a string\n", .{name});
+            return error.VectorFailed;
+        }
         if (!std.mem.startsWith(u8, paserk_val.string, "k3.seal.")) {
+            try std.testing.expect(expect_fail);
             const result = paseto.paserk.pke.unsealV3(allocator, scalar, paserk_val.string);
             if (result) |r| {
                 allocator.free(r);
                 std.debug.print("{s}: unexpectedly unsealed wrong-version\n", .{name});
                 try std.testing.expect(false);
             } else |_| {}
+            processed += 1;
             continue;
         }
 
@@ -237,7 +306,9 @@ test "PASERK seal vectors v3" {
                 return err;
             }
         }
+        processed += 1;
     }
+    try std.testing.expectEqual(tests.items.len, processed);
 }
 
 test "PASERK pie wrap vectors" {
@@ -256,10 +327,13 @@ test "PASERK pie wrap vectors" {
         .{ .path = "tests/vectors/k4.secret-wrap.pie.json", .version = .v4, .kind = .secret },
     };
 
+    var total_processed: usize = 0;
     for (cases) |c| {
         var parsed = try readVectorFile(allocator, c.path);
         defer parsed.deinit();
         const tests = parsed.value.object.get("tests").?.array;
+        try std.testing.expect(tests.items.len > 0);
+        var processed: usize = 0;
         for (tests.items) |tv| {
             const t = tv.object;
             const name = t.get("name").?.string;
@@ -271,34 +345,52 @@ test "PASERK pie wrap vectors" {
             const wrapping = try hexAlloc(allocator, wrapping_hex);
             defer allocator.free(wrapping);
 
-            if (paserk_val == .string) {
-                const result = paseto.paserk.pie.unwrap(allocator, wrapping, paserk_val.string);
-                if (result) |r_val| {
-                    var r = r_val;
-                    defer r.deinit();
-                    // Vector files carry a specific version — reject mismatches
-                    // (the "PASERK of the wrong version" failure mode).
-                    const version_matches = r.version == c.version;
-                    const kind_matches = r.kind == c.kind;
-                    if (expect_fail and version_matches and kind_matches) {
-                        std.debug.print("{s}: unexpectedly unwrapped\n", .{name});
-                        try std.testing.expect(false);
+            if (paserk_val == .null) {
+                try std.testing.expect(expect_fail);
+                processed += 1;
+                continue;
+            }
+            if (paserk_val != .string) {
+                std.debug.print("{s}: paserk is not string-or-null\n", .{name});
+                return error.VectorFailed;
+            }
+
+            const result = paseto.paserk.pie.unwrap(allocator, wrapping, paserk_val.string);
+            if (result) |r_val| {
+                var r = r_val;
+                defer r.deinit();
+                // Vector files carry a specific version — treat mismatches
+                // as the "PASERK of the wrong version" failure mode.
+                const matches = r.version == c.version and r.kind == c.kind;
+                if (expect_fail) {
+                    if (!matches) {
+                        processed += 1;
+                        continue;
                     }
-                    if (!(version_matches and kind_matches)) continue;
-                    if (unwrapped_val == .string) {
-                        const expected = try hexAlloc(allocator, unwrapped_val.string);
-                        defer allocator.free(expected);
-                        try std.testing.expectEqualSlices(u8, expected, r.bytes);
-                    }
-                } else |err| {
-                    if (!expect_fail) {
-                        std.debug.print("{s}: unexpected error {s}\n", .{ name, @errorName(err) });
-                        return err;
-                    }
+                    std.debug.print("{s}: unexpectedly unwrapped\n", .{name});
+                    try std.testing.expect(false);
+                }
+                if (!matches) {
+                    std.debug.print("{s}: version/kind mismatch\n", .{name});
+                    try std.testing.expect(false);
+                }
+                if (unwrapped_val == .string) {
+                    const expected = try hexAlloc(allocator, unwrapped_val.string);
+                    defer allocator.free(expected);
+                    try std.testing.expectEqualSlices(u8, expected, r.bytes);
+                }
+            } else |err| {
+                if (!expect_fail) {
+                    std.debug.print("{s}: unexpected error {s}\n", .{ name, @errorName(err) });
+                    return err;
                 }
             }
+            processed += 1;
         }
+        try std.testing.expectEqual(tests.items.len, processed);
+        total_processed += processed;
     }
+    try std.testing.expect(total_processed > 0);
 }
 
 test "PASERK id vectors" {
@@ -319,10 +411,13 @@ test "PASERK id vectors" {
         .{ .path = "tests/vectors/k3.pid.json", .version = .v3, .kind = .pid },
     };
 
+    var total_processed: usize = 0;
     for (cases) |c| {
         var parsed = try readVectorFile(allocator, c.path);
         defer parsed.deinit();
         const tests = parsed.value.object.get("tests").?.array;
+        try std.testing.expect(tests.items.len > 0);
+        var processed: usize = 0;
         for (tests.items) |tv| {
             const t = tv.object;
             const name = t.get("name").?.string;
@@ -352,8 +447,12 @@ test "PASERK id vectors" {
                     return err;
                 }
             }
+            processed += 1;
         }
+        try std.testing.expectEqual(tests.items.len, processed);
+        total_processed += processed;
     }
+    try std.testing.expect(total_processed > 0);
 }
 
 test "PASETO v3 vectors" {
@@ -362,6 +461,11 @@ test "PASETO v3 vectors" {
     defer parsed.deinit();
     const root = parsed.value.object;
     const tests = root.get("tests").?.array;
+    try std.testing.expect(tests.items.len > 0);
+
+    var seen_local: usize = 0;
+    var seen_public: usize = 0;
+    var seen_fail: usize = 0;
     for (tests.items) |test_val| {
         const t = test_val.object;
         const name = t.get("name").?.string;
@@ -372,12 +476,21 @@ test "PASETO v3 vectors" {
 
         if (std.mem.startsWith(u8, name, "3-E-")) {
             try runV3Local(allocator, name, t, token, footer, implicit_assertion, expect_fail);
+            seen_local += 1;
         } else if (std.mem.startsWith(u8, name, "3-S-")) {
             try runV3Public(allocator, name, t, token, footer, implicit_assertion, expect_fail);
+            seen_public += 1;
         } else if (std.mem.startsWith(u8, name, "3-F-")) {
             try runV3Fail(allocator, name, t, token, footer, implicit_assertion);
+            seen_fail += 1;
+        } else {
+            std.debug.print("unrecognized v3 vector: {s}\n", .{name});
+            return error.VectorFailed;
         }
     }
+    try std.testing.expect(seen_local > 0);
+    try std.testing.expect(seen_public > 0);
+    try std.testing.expect(seen_fail > 0);
 }
 
 fn runV3Local(
@@ -476,31 +589,36 @@ fn runV3Fail(
     implicit_assertion: []const u8,
 ) !void {
     _ = footer;
-    const is_public_token = std.mem.indexOf(u8, token, ".public.") != null;
+    var exercised: usize = 0;
 
-    if (is_public_token) {
-        const pkv = t.get("public-key") orelse return;
-        if (pkv != .string) return;
-        const pk_bytes = try hexAlloc(allocator, pkv.string);
-        defer allocator.free(pk_bytes);
-        const verifier = paseto.v3.Public.fromPublicBytes(pk_bytes) catch return;
-        if (verifier.verify(allocator, token, implicit_assertion)) |v| {
+    if (getOptionalString(t, "key")) |key_hex| {
+        const key_bytes = try hexToArr(key_hex, 32);
+        const key = paseto.v3.Local{ .key = key_bytes };
+        if (key.decrypt(allocator, token, implicit_assertion)) |v| {
             allocator.free(v);
-            std.debug.print("vector {s}: unexpectedly verified\n", .{name});
+            std.debug.print("vector {s}: unexpectedly decrypted\n", .{name});
             try std.testing.expect(false);
         } else |_| {}
-        return;
+        exercised += 1;
     }
 
-    const kv = t.get("key") orelse return;
-    if (kv != .string) return;
-    const key_bytes = try hexToArr(kv.string, 32);
-    const key = paseto.v3.Local{ .key = key_bytes };
-    if (key.decrypt(allocator, token, implicit_assertion)) |v| {
-        allocator.free(v);
-        std.debug.print("vector {s}: unexpectedly decrypted\n", .{name});
-        try std.testing.expect(false);
-    } else |_| {}
+    if (getOptionalString(t, "public-key")) |pk_hex| {
+        const pk_bytes = try hexAlloc(allocator, pk_hex);
+        defer allocator.free(pk_bytes);
+        if (paseto.v3.Public.fromPublicBytes(pk_bytes)) |verifier| {
+            if (verifier.verify(allocator, token, implicit_assertion)) |v| {
+                allocator.free(v);
+                std.debug.print("vector {s}: unexpectedly verified\n", .{name});
+                try std.testing.expect(false);
+            } else |_| {}
+        } else |_| {}
+        exercised += 1;
+    }
+
+    if (exercised == 0) {
+        std.debug.print("{s}: fail vector has no key or public-key\n", .{name});
+        return error.VectorFailed;
+    }
 }
 
 fn runV4Local(
@@ -600,31 +718,37 @@ fn runV4Fail(
     implicit_assertion: []const u8,
 ) !void {
     _ = footer;
-    // v4 fail-vectors always carry v4-shaped key material. The token may be
-    // v3 or v4, local or public — the point is that decoding with the v4 key
-    // must fail (wrong version, malformed base64, corrupted ciphertext, etc).
-    const is_public_token = std.mem.indexOf(u8, token, ".public.") != null;
+    // Fail-vectors may deliberately mix key types with tokens (e.g. a v4.local
+    // token paired with a v4.public key to prove the library rejects purpose
+    // mismatches). Try whichever key material the vector supplies; every
+    // attempt must fail.
+    var exercised: usize = 0;
 
-    if (is_public_token) {
-        const pkv = t.get("public-key") orelse return;
-        if (pkv != .string) return;
-        const pk_bytes = try hexToArr(pkv.string, 32);
-        const verifier = paseto.v4.Public.fromPublicKeyBytes(&pk_bytes) catch return;
-        if (verifier.verify(allocator, token, implicit_assertion)) |v| {
+    if (getOptionalString(t, "key")) |key_hex| {
+        const key_bytes = try hexToArr(key_hex, 32);
+        const key = paseto.v4.Local{ .key = key_bytes };
+        if (key.decrypt(allocator, token, implicit_assertion)) |v| {
             allocator.free(v);
-            std.debug.print("vector {s}: unexpectedly verified\n", .{name});
+            std.debug.print("vector {s}: unexpectedly decrypted\n", .{name});
             try std.testing.expect(false);
         } else |_| {}
-        return;
+        exercised += 1;
     }
 
-    const kv = t.get("key") orelse return;
-    if (kv != .string) return;
-    const key_bytes = try hexToArr(kv.string, 32);
-    const key = paseto.v4.Local{ .key = key_bytes };
-    if (key.decrypt(allocator, token, implicit_assertion)) |v| {
-        allocator.free(v);
-        std.debug.print("vector {s}: unexpectedly decrypted\n", .{name});
-        try std.testing.expect(false);
-    } else |_| {}
+    if (getOptionalString(t, "public-key")) |pk_hex| {
+        const pk_bytes = try hexToArr(pk_hex, 32);
+        if (paseto.v4.Public.fromPublicKeyBytes(&pk_bytes)) |verifier| {
+            if (verifier.verify(allocator, token, implicit_assertion)) |v| {
+                allocator.free(v);
+                std.debug.print("vector {s}: unexpectedly verified\n", .{name});
+                try std.testing.expect(false);
+            } else |_| {}
+        } else |_| {}
+        exercised += 1;
+    }
+
+    if (exercised == 0) {
+        std.debug.print("{s}: fail vector has no key or public-key\n", .{name});
+        return error.VectorFailed;
+    }
 }

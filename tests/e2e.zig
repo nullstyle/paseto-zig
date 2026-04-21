@@ -99,6 +99,95 @@ test "claims validator: exp/nbf/iat and custom audience" {
     try std.testing.expectError(paseto.Error.InvalidAudience, v2.validate(claims, allocator));
 }
 
+test "v4.local rejects wrong implicit assertion" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v4.Local.generate();
+    const tok = try key.encrypt(allocator, "hello", .{ .implicit_assertion = "a" });
+    defer allocator.free(tok);
+    try std.testing.expectError(paseto.Error.InvalidAuthenticator, key.decrypt(allocator, tok, "b"));
+}
+
+test "v4.local rejects footer tampering" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v4.Local.generate();
+    const tok = try key.encrypt(allocator, "hello", .{ .footer = "footer-v1" });
+    defer allocator.free(tok);
+
+    var parsed = try paseto.token.parse(allocator, tok);
+    defer parsed.deinit();
+    parsed.footer[0] ^= 0x01;
+    const tampered = try paseto.token.serialize(allocator, parsed.version, parsed.purpose, parsed.payload, parsed.footer);
+    defer allocator.free(tampered);
+
+    try std.testing.expectError(paseto.Error.InvalidAuthenticator, key.decrypt(allocator, tampered, ""));
+}
+
+test "v4.local rejects payload tampering" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v4.Local.generate();
+    const tok = try key.encrypt(allocator, "hello", .{});
+    defer allocator.free(tok);
+
+    var parsed = try paseto.token.parse(allocator, tok);
+    defer parsed.deinit();
+    // Flip a byte in the middle of the raw payload (which covers nonce,
+    // ciphertext, and tag). Any position will cause MAC verification to
+    // fail — the tag is the last 32 bytes so we flip there directly.
+    parsed.payload[parsed.payload.len - 1] ^= 0x01;
+    const tampered = try paseto.token.serialize(allocator, parsed.version, parsed.purpose, parsed.payload, parsed.footer);
+    defer allocator.free(tampered);
+
+    try std.testing.expectError(paseto.Error.InvalidAuthenticator, key.decrypt(allocator, tampered, ""));
+}
+
+test "v4.local rejects wrong key" {
+    const allocator = std.testing.allocator;
+    const signer = paseto.v4.Local.generate();
+    const wrong = paseto.v4.Local.generate();
+    const tok = try signer.encrypt(allocator, "hello", .{});
+    defer allocator.free(tok);
+    try std.testing.expectError(paseto.Error.InvalidAuthenticator, wrong.decrypt(allocator, tok, ""));
+}
+
+test "v4.public rejects signature tampering" {
+    const allocator = std.testing.allocator;
+    const signer = try paseto.v4.Public.fromSeed(&[_]u8{0} ** 32);
+    const tok = try signer.sign(allocator, "msg", .{});
+    defer allocator.free(tok);
+
+    // Parse the token, flip the last signature byte, re-emit with the same
+    // serializer so the resulting base64 body is still well-formed.
+    var parsed = try paseto.token.parse(allocator, tok);
+    defer parsed.deinit();
+    parsed.payload[parsed.payload.len - 1] ^= 0x01;
+    const tampered = try paseto.token.serialize(allocator, parsed.version, parsed.purpose, parsed.payload, parsed.footer);
+    defer allocator.free(tampered);
+
+    try std.testing.expectError(paseto.Error.InvalidSignature, signer.verify(allocator, tampered, ""));
+}
+
+test "v4.public rejects verification with wrong key" {
+    const allocator = std.testing.allocator;
+    const signer = paseto.v4.Public.generate();
+    const other = paseto.v4.Public.generate();
+    const tok = try signer.sign(allocator, "msg", .{});
+    defer allocator.free(tok);
+    try std.testing.expectError(paseto.Error.InvalidSignature, other.verify(allocator, tok, ""));
+}
+
+test "Token parser rejects malformed inputs" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v4.Local.generate();
+    // Missing third segment.
+    try std.testing.expectError(paseto.Error.InvalidToken, key.decrypt(allocator, "v4.local", ""));
+    // Unknown version.
+    try std.testing.expectError(paseto.Error.UnsupportedVersion, key.decrypt(allocator, "v2.local.AAAA", ""));
+    // Unknown purpose.
+    try std.testing.expectError(paseto.Error.UnsupportedPurpose, key.decrypt(allocator, "v4.nope.AAAA", ""));
+    // Padded base64 (PASETO forbids).
+    try std.testing.expectError(paseto.Error.InvalidPadding, key.decrypt(allocator, "v4.local.AAA=", ""));
+}
+
 test "claims validator rejects malformed required claims" {
     const allocator = std.testing.allocator;
     const validator: paseto.Validator = .{
