@@ -90,6 +90,11 @@ pub fn build(b: *std.Build) void {
     addFuzzHarness(fuzz_ctx, "paserk_pke", "tests/fuzz/paserk_pke.zig", fuzz_envelopes_step);
     addFuzzHarness(fuzz_ctx, "paserk_pbkw", "tests/fuzz/paserk_pbkw.zig", fuzz_envelopes_step);
     addFuzzHarness(fuzz_ctx, "paserk_id", "tests/fuzz/paserk_id.zig", fuzz_envelopes_step);
+
+    addFuzzHarness(fuzz_ctx, "v4_local", "tests/fuzz/v4_local.zig", fuzz_envelopes_step);
+    addFuzzHarness(fuzz_ctx, "v4_public", "tests/fuzz/v4_public.zig", fuzz_envelopes_step);
+    addFuzzHarness(fuzz_ctx, "v3_local", "tests/fuzz/v3_local.zig", fuzz_envelopes_step);
+    addFuzzHarness(fuzz_ctx, "v3_public", "tests/fuzz/v3_public.zig", fuzz_envelopes_step);
 }
 
 const FuzzCtx = struct {
