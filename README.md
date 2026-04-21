@@ -2,7 +2,7 @@
 
 A full-featured implementation of [PASETO](https://github.com/paseto-standard/paseto-spec)
 (Platform-Agnostic Security Tokens) and [PASERK](https://github.com/paseto-standard/paserk)
-(Platform-Agnostic Serialized Keys) for Zig `0.16.0-dev`.
+(Platform-Agnostic Serialized Keys) for Zig `0.16.0`.
 
 Supports PASETO `v3` (NIST Modern — AES-256-CTR, HMAC-SHA384, ECDSA P-384)
 and `v4` (Sodium Modern — XChaCha20, BLAKE2b-keyed, Ed25519), covering both
@@ -24,20 +24,31 @@ for every supported protocol and PASERK type.
 
 ## Installing
 
-Add this repo as a dependency to your `build.zig.zon`:
+> **Note:** The library is not yet published to a public registry. For now
+> add it as a local or git dependency. Once `paseto-zig` is published the
+> URL+hash values below will become real.
+
+`build.zig.zon`:
 
 ```zig
 .dependencies = .{
-    .paseto = .{ .url = "…", .hash = "…" },
+    .paseto = .{
+        // TODO: populate once paseto-zig has a published release.
+        .url = "https://example.invalid/paseto-zig-0.1.0.tar.gz",
+        .hash = "0000000000000000000000000000000000000000000000000000000000000000",
+    },
 },
 ```
 
-Then in your `build.zig`:
+`build.zig`:
 
 ```zig
 const paseto = b.dependency("paseto", .{ .target = target, .optimize = optimize });
 exe.root_module.addImport("paseto", paseto.module("paseto"));
 ```
+
+To pin directly to a local checkout while developing, replace the `url`/`hash`
+pair with `.path = "/abs/path/to/paseto-zig"`.
 
 ## Quick tour
 
@@ -152,7 +163,9 @@ strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 
 ## Compatibility
 
-* **Zig:** `0.16.0-dev` (uses the new `std.Io` interface).
+* **Zig:** `0.16.0` (uses the new `std.Io` interface and the `ArrayList`,
+  `Writergate`, and random-via-`Io` changes). Earlier versions are not
+  supported.
 * **Randomness:** library functions that need entropy (key / nonce / salt
   generation) draw from `std.Io.Threaded.global_single_threaded`, which is
   backed by the host operating system's CSPRNG. Callers who need their own
@@ -162,20 +175,31 @@ strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 ## Testing
 
 ```sh
+# Full suite (unit + vectors + e2e).
 zig build test
+
+# Focused entrypoints — see `zig build --help` for the full list.
+zig build unit     # source-embedded unit tests only (fast, <1s)
+zig build vectors  # official PASETO/PASERK test vectors (≈30s — argon2id)
+zig build e2e      # end-to-end smoke tests using the public API
 ```
 
-The test suite runs three passes:
+The PBKW argon2id vectors dominate wall-clock runtime; when iterating on
+unrelated changes use `zig build unit` or `zig build e2e` for fast feedback
+and only run `zig build test` before committing.
 
-1. Unit tests embedded in each source file (crypto round trips, utility
-   sanity checks, PEM decode for each supported key format).
-2. `tests/vectors.zig` — every official PASETO/PASERK test vector shipped
-   under `tests/vectors/*.json`.
-3. `tests/e2e.zig` — end-to-end examples exercising the high-level API.
+## Contributing
 
-The PBKW argon2id tests dominate runtime (≈30 s on a typical machine); set
-lower limits in `opts.params` if you need faster turnaround when
-prototyping.
+1. Install Zig `0.16.0`.
+2. Clone with submodules if you want the Ruby reference (optional):
+   ```sh
+   git clone --recurse-submodules …
+   ```
+   The `vendor/ruby/` tree is **reference only**. Do not edit it as part of
+   normal changes to the Zig library; it exists so reviewers can diff
+   against the upstream Ruby implementation's feature set.
+3. Make your change. Prefer narrowly-scoped commits with their own tests.
+4. Run `zig build test` and ensure the full suite is green before pushing.
 
 ## Acknowledgements
 
