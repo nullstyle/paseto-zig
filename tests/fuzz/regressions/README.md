@@ -2,7 +2,9 @@
 
 `tests/fuzz/regressions/` is for minimized repro inputs that demonstrate a
 real bug the fuzz suite found and that we want to keep permanently wired into
-the relevant harness.
+the relevant harness. Store each repro under the matching per-harness
+directory, for example `tests/fuzz/regressions/token/` or
+`tests/fuzz/regressions/paserk_pie/`.
 
 What belongs here:
 - Inputs that previously crashed the process, tripped an unexpected assertion,
@@ -18,21 +20,22 @@ What should stay in a normal corpus instead:
   contract and do not represent a new bug class.
 
 Naming guidance:
-- Prefix with the harness name so ownership is obvious.
-- Follow with the bug class and an optional short discriminator.
+- Let the directory carry the harness ownership.
+- Name the file after the bug class and an optional short discriminator.
 - Use stable, descriptive names such as:
-  - `token-invalid-padding-overread.bin`
-  - `paserk_pie-body-mutation-accepts.bin`
-  - `v4_public-short-signature-panics.bin`
+  - `invalid-padding-overread.bin`
+  - `body-mutation-accepts.bin`
+  - `short-signature-panics.bin`
 
 Wiring a repro into a harness:
-1. Add the file under `tests/fuzz/regressions/` using the naming scheme above.
+1. Add the file under `tests/fuzz/regressions/<harness>/` using the naming
+   scheme above.
 2. Add it to the relevant harness seed list with `@embedFile`, for example:
 
 ```zig
 const seeds = [_][]const u8{
     @embedFile("corpus/token/header_only.bin"),
-    @embedFile("regressions/token-invalid-padding-overread.bin"),
+    @embedFile("regressions/token/invalid-padding-overread.bin"),
 };
 ```
 
