@@ -41,7 +41,9 @@ fn verifyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const n = s.slice(&tok_buf);
     const token_str = tok_buf[0..n];
 
-    const pk = try paseto.v3.Public.generate();
+    var scalar: [48]u8 = undefined;
+    s.bytes(&scalar);
+    const pk = try support.deriveValidV3Public(scalar);
 
     var assertion_buf: [64]u8 = undefined;
     const a_n = s.slice(&assertion_buf);
@@ -55,7 +57,9 @@ fn verifyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
 fn roundTripFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
-    const pk = try paseto.v3.Public.generate();
+    var scalar: [48]u8 = undefined;
+    s.bytes(&scalar);
+    const pk = try support.deriveValidV3Public(scalar);
 
     var msg_buf: [1024]u8 = undefined;
     const msg_n = s.slice(&msg_buf);
@@ -80,7 +84,9 @@ fn roundTripFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
 fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
-    const pk = try paseto.v3.Public.generate();
+    var scalar: [48]u8 = undefined;
+    s.bytes(&scalar);
+    const pk = try support.deriveValidV3Public(scalar);
 
     var msg_buf: [256]u8 = undefined;
     const msg_n = s.slice(&msg_buf);
@@ -115,12 +121,13 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
 fn wrongKeyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
-    const signer = try paseto.v3.Public.generate();
-    var verifier = try paseto.v3.Public.generate();
+    var signer_scalar: [48]u8 = undefined;
+    s.bytes(&signer_scalar);
+    const signer = try support.deriveValidV3Public(signer_scalar);
     const signer_public = signer.publicCompressed();
-    while (std.mem.eql(u8, &signer_public, &verifier.publicCompressed())) {
-        verifier = try paseto.v3.Public.generate();
-    }
+    var verifier_scalar: [48]u8 = undefined;
+    s.bytes(&verifier_scalar);
+    const verifier = try support.deriveDistinctValidV3Public(verifier_scalar, signer_public);
 
     var msg_buf: [256]u8 = undefined;
     const msg_n = s.slice(&msg_buf);

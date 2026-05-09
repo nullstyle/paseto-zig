@@ -129,14 +129,20 @@ fn roundTripV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
 fn roundTripV3Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
 
-    const pk = try paseto.v3.Public.generate();
+    var scalar_seed: [48]u8 = undefined;
+    s.bytes(&scalar_seed);
+    const pk = try support.deriveValidV3Public(scalar_seed);
     const scalar_bytes = pk.secretBytes() orelse unreachable;
     const pub_compressed = pk.publicCompressed();
 
     var ptk: [32]u8 = undefined;
     s.bytes(&ptk);
+    var ephemeral_scalar: [48]u8 = undefined;
+    s.bytes(&ephemeral_scalar);
+    const ephemeral = try support.deriveValidV3Public(ephemeral_scalar);
+    const ephemeral_bytes = ephemeral.secretBytes() orelse unreachable;
 
-    const sealed = try paseto.paserk.pke.sealV3(allocator, &pub_compressed, &ptk, null);
+    const sealed = try paseto.paserk.pke.sealV3(allocator, &pub_compressed, &ptk, ephemeral_bytes);
     defer allocator.free(sealed);
 
     const recovered = try paseto.paserk.pke.unsealV3(allocator, scalar_bytes, sealed);
@@ -182,14 +188,20 @@ fn mutationV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
 fn mutationV3Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
 
-    const pk = try paseto.v3.Public.generate();
+    var scalar_seed: [48]u8 = undefined;
+    s.bytes(&scalar_seed);
+    const pk = try support.deriveValidV3Public(scalar_seed);
     const scalar = pk.secretBytes() orelse unreachable;
     const recipient_pub = pk.publicCompressed();
 
     var ptk: [32]u8 = undefined;
     s.bytes(&ptk);
+    var ephemeral_scalar: [48]u8 = undefined;
+    s.bytes(&ephemeral_scalar);
+    const ephemeral = try support.deriveValidV3Public(ephemeral_scalar);
+    const ephemeral_bytes = ephemeral.secretBytes() orelse unreachable;
 
-    const sealed = try paseto.paserk.pke.sealV3(allocator, &recipient_pub, &ptk, null);
+    const sealed = try paseto.paserk.pke.sealV3(allocator, &recipient_pub, &ptk, ephemeral_bytes);
     defer allocator.free(sealed);
 
     const tampered = try support.mutatePaserkBody(allocator, sealed, "k3.seal.", s);

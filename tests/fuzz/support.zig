@@ -202,6 +202,40 @@ pub const public_ctor_errors = [_]paseto.Error{
     error.OutOfMemory,
 };
 
+/// Deterministically turn arbitrary 48-byte input into a valid v3 private
+/// scalar by incrementing until `fromScalarBytes` accepts it. Invalid P-384
+/// scalars are rare, so this stays reproducible without depending on ambient
+/// randomness.
+pub fn deriveValidV3Public(seed: [48]u8) !paseto.v3.Public {
+    var candidate = seed;
+    while (true) {
+        if (paseto.v3.Public.fromScalarBytes(&candidate)) |pk| return pk else |_| {
+            bumpScalar(&candidate);
+        }
+    }
+}
+
+/// Deterministically derive a second distinct v3 key from the first seed.
+pub fn deriveDistinctValidV3Public(seed: [48]u8, other_public: [49]u8) !paseto.v3.Public {
+    var candidate = seed;
+    bumpScalar(&candidate);
+    while (true) {
+        const pk = try deriveValidV3Public(candidate);
+        if (!std.mem.eql(u8, &pk.publicCompressed(), &other_public)) return pk;
+        bumpScalar(&candidate);
+    }
+}
+
+fn bumpScalar(candidate: *[48]u8) void {
+    var i = candidate.len;
+    while (i > 0) {
+        i -= 1;
+        const sum = @addWithOverflow(candidate[i], 1);
+        candidate[i] = sum[0];
+        if (sum[1] == 0) return;
+    }
+}
+
 /// Mutates a PASERK body byte while preserving the textual prefix. Returns an
 /// allocator-owned duplicate; if there is no body byte to mutate yet, the
 /// duplicate is returned unchanged so the caller can treat it as a no-op case.
