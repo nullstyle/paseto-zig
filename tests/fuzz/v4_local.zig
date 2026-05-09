@@ -25,6 +25,10 @@ test "fuzz: v4.Local mutation reject" {
     try std.testing.fuzz({}, mutationFuzz, .{});
 }
 
+test "fuzz: v4.Local wrong-key reject" {
+    try std.testing.fuzz({}, wrongKeyFuzz, .{});
+}
+
 fn decryptFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     var tok_buf: [support.max_input_bytes]u8 = undefined;
     const n = s.slice(&tok_buf);
@@ -91,19 +95,67 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     var footer_buf: [64]u8 = undefined;
     const f_n = s.slice(&footer_buf);
     const footer = footer_buf[0..f_n];
+    var assertion_buf: [64]u8 = undefined;
+    const a_n = s.slice(&assertion_buf);
+    const assertion = assertion_buf[0..a_n];
+    var nonce: [32]u8 = undefined;
+    s.bytes(&nonce);
 
-    const token_str = try key.encrypt(allocator, message, .{ .footer = footer });
+    const token_str = try key.encrypt(allocator, message, .{
+        .footer = footer,
+        .implicit_assertion = assertion,
+        .nonce = nonce,
+    });
     defer allocator.free(token_str);
 
-    const mutation = support.pickMutation(s);
-    const tampered = try support.mutateToken(allocator, token_str, mutation, s);
-    defer allocator.free(tampered);
+    for (support.token_mutation_classes) |mutation| {
+        const tampered = try support.mutateToken(allocator, token_str, mutation, s);
+        defer allocator.free(tampered);
 
-    if (std.mem.eql(u8, tampered, token_str)) return; // no-op mutation on degenerate input
+        if (std.mem.eql(u8, tampered, token_str)) continue;
 
-    if (key.decrypt(allocator, tampered, "")) |ok| {
+        if (key.decrypt(allocator, tampered, assertion)) |ok| {
+            allocator.free(ok);
+            return error.MutatedTokenShouldNotDecrypt;
+        } else |err| {
+            try support.expectAllowed(err, &support.local_decrypt_errors);
+        }
+    }
+}
+
+fn wrongKeyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    const allocator = std.testing.allocator;
+    var key_buf: [32]u8 = undefined;
+    s.bytes(&key_buf);
+    const key = try paseto.v4.Local.fromBytes(&key_buf);
+
+    var wrong_key_buf = key_buf;
+    const wrong_idx = s.valueRangeLessThan(u64, 0, wrong_key_buf.len);
+    wrong_key_buf[@intCast(wrong_idx)] ^= 0xff;
+    const wrong_key = try paseto.v4.Local.fromBytes(&wrong_key_buf);
+
+    var msg_buf: [256]u8 = undefined;
+    const msg_n = s.slice(&msg_buf);
+    const message = msg_buf[0..msg_n];
+    var footer_buf: [64]u8 = undefined;
+    const f_n = s.slice(&footer_buf);
+    const footer = footer_buf[0..f_n];
+    var assertion_buf: [64]u8 = undefined;
+    const a_n = s.slice(&assertion_buf);
+    const assertion = assertion_buf[0..a_n];
+    var nonce: [32]u8 = undefined;
+    s.bytes(&nonce);
+
+    const token_str = try key.encrypt(allocator, message, .{
+        .footer = footer,
+        .implicit_assertion = assertion,
+        .nonce = nonce,
+    });
+    defer allocator.free(token_str);
+
+    if (wrong_key.decrypt(allocator, token_str, assertion)) |ok| {
         allocator.free(ok);
-        return error.MutatedTokenShouldNotDecrypt;
+        return error.WrongKeyShouldNotDecrypt;
     } else |err| {
         try support.expectAllowed(err, &support.local_decrypt_errors);
     }

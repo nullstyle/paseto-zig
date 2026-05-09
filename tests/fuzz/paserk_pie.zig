@@ -104,17 +104,24 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     s.bytes(&wrapping);
 
     const version = s.value(paseto.Version);
+    const kind = s.value(paseto.paserk.pie.Kind);
     const ptk_len: usize = switch (version) {
-        .v3 => 32,
-        .v4 => 32,
+        .v3 => switch (kind) {
+            .local => 32,
+            .secret => 48,
+        },
+        .v4 => switch (kind) {
+            .local => 32,
+            .secret => 64,
+        },
     };
-    var ptk: [32]u8 = undefined;
+    var ptk: [64]u8 = undefined;
     s.bytes(ptk[0..ptk_len]);
 
     const wrapped = try paseto.paserk.pie.wrap(
         allocator,
         version,
-        .local,
+        kind,
         &wrapping,
         ptk[0..ptk_len],
         .{},
@@ -123,8 +130,14 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     if (wrapped.len == 0) return;
 
     const prefix = switch (version) {
-        .v3 => "k3.local-wrap.pie.",
-        .v4 => "k4.local-wrap.pie.",
+        .v3 => switch (kind) {
+            .local => "k3.local-wrap.pie.",
+            .secret => "k3.secret-wrap.pie.",
+        },
+        .v4 => switch (kind) {
+            .local => "k4.local-wrap.pie.",
+            .secret => "k4.secret-wrap.pie.",
+        },
     };
     const tampered = try support.mutatePaserkBody(allocator, wrapped, prefix, s);
     defer allocator.free(tampered);

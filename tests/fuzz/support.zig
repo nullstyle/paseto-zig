@@ -35,6 +35,14 @@ pub const MutationClass = enum {
     extra_segment,
 };
 
+pub const token_mutation_classes = [_]MutationClass{
+    .header_byte,
+    .payload_byte,
+    .footer_byte,
+    .authenticator_byte,
+    .extra_segment,
+};
+
 pub fn pickMutation(s: *std.testing.Smith) MutationClass {
     return s.value(MutationClass);
 }

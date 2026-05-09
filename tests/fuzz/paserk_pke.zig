@@ -11,6 +11,7 @@ const seeds_unseal = [_][]const u8{
     @embedFile("corpus/paserk_pke/k4_seal_valid.bin"),
     @embedFile("corpus/paserk_pke/k3_seal_valid.bin"),
     @embedFile("corpus/paserk_pke/short.bin"),
+    @embedFile("corpus/paserk_pke/bad_version.bin"),
 };
 
 const unseal_errors = [_]paseto.Error{
@@ -45,6 +46,10 @@ test "fuzz: pke v3 seal/unseal round-trip" {
 
 test "fuzz: pke v4 mutation reject" {
     try std.testing.fuzz({}, mutationV4Fuzz, .{});
+}
+
+test "fuzz: pke v3 mutation reject" {
+    try std.testing.fuzz({}, mutationV3Fuzz, .{});
 }
 
 fn unsealV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -121,17 +126,14 @@ fn roundTripV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
 fn roundTripV3Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
 
-    var scalar_bytes: [48]u8 = undefined;
-    s.bytes(&scalar_bytes);
-    const pk = paseto.v3.Public.fromScalarBytes(&scalar_bytes) catch return;
+    const pk = try paseto.v3.Public.generate();
+    const scalar_bytes = pk.secretBytes() orelse unreachable;
     const pub_compressed = pk.publicCompressed();
 
     var ptk: [32]u8 = undefined;
     s.bytes(&ptk);
-    var ephemeral_scalar: [48]u8 = undefined;
-    s.bytes(&ephemeral_scalar);
 
-    const sealed = paseto.paserk.pke.sealV3(allocator, &pub_compressed, &ptk, ephemeral_scalar) catch return;
+    const sealed = try paseto.paserk.pke.sealV3(allocator, &pub_compressed, &ptk, null);
     defer allocator.free(sealed);
 
     const recovered = try paseto.paserk.pke.unsealV3(allocator, scalar_bytes, sealed);
@@ -144,13 +146,14 @@ fn mutationV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     var seed: [32]u8 = undefined;
     s.bytes(&seed);
-    const pk = paseto.v4.Public.fromSeed(&seed) catch return;
+    const pk = try paseto.v4.Public.fromSeed(&seed);
     const recipient_pub = pk.publicKeyBytes();
+    const secret = pk.secretKeyBytes() orelse unreachable;
 
     var ptk: [32]u8 = undefined;
     s.bytes(&ptk);
 
-    const sealed = paseto.paserk.pke.sealV4(allocator, recipient_pub, &ptk, null) catch return;
+    const sealed = try paseto.paserk.pke.sealV4(allocator, recipient_pub, &ptk, null);
     defer allocator.free(sealed);
     if (sealed.len <= 8) return; // need at least header + a body byte
 
@@ -159,6 +162,38 @@ fn mutationV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     if (std.mem.eql(u8, tampered, sealed)) return;
 
     if (paseto.paserk.pke.unsealV4(allocator, seed, tampered)) |ok| {
+        allocator.free(ok);
+        return error.MutatedSealShouldNotUnseal;
+    } else |err| {
+        try support.expectAllowed(err, &unseal_errors);
+    }
+
+    if (paseto.paserk.pke.unsealV4FromSecretKey(allocator, secret, tampered)) |ok| {
+        allocator.free(ok);
+        return error.MutatedSealShouldNotUnsealWithSecretKey;
+    } else |err| {
+        try support.expectAllowed(err, &unseal_errors);
+    }
+}
+
+fn mutationV3Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    const allocator = std.testing.allocator;
+
+    const pk = try paseto.v3.Public.generate();
+    const scalar = pk.secretBytes() orelse unreachable;
+    const recipient_pub = pk.publicCompressed();
+
+    var ptk: [32]u8 = undefined;
+    s.bytes(&ptk);
+
+    const sealed = try paseto.paserk.pke.sealV3(allocator, &recipient_pub, &ptk, null);
+    defer allocator.free(sealed);
+
+    const tampered = try support.mutatePaserkBody(allocator, sealed, "k3.seal.", s);
+    defer allocator.free(tampered);
+    if (std.mem.eql(u8, tampered, sealed)) return;
+
+    if (paseto.paserk.pke.unsealV3(allocator, scalar, tampered)) |ok| {
         allocator.free(ok);
         return error.MutatedSealShouldNotUnseal;
     } else |err| {

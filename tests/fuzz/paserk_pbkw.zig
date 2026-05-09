@@ -8,7 +8,10 @@ const paseto = @import("paseto");
 const support = @import("support.zig");
 
 const seeds_unwrap = [_][]const u8{
+    @embedFile("corpus/paserk_pbkw/k3_local_pw.bin"),
+    @embedFile("corpus/paserk_pbkw/k3_secret_pw.bin"),
     @embedFile("corpus/paserk_pbkw/k4_local_pw.bin"),
+    @embedFile("corpus/paserk_pbkw/k4_secret_pw.bin"),
     @embedFile("corpus/paserk_pbkw/short.bin"),
     @embedFile("corpus/paserk_pbkw/bad_version.bin"),
 };
@@ -27,28 +30,29 @@ const unwrap_errors = [_]paseto.Error{
     error.InvalidPadding,
 };
 
-const wrap_errors = [_]paseto.Error{
-    error.InvalidKey,
-    error.WeakParameters,
-    error.Canceled,
-    error.OutOfMemory,
-};
-
 test "fuzz: pbkw.unwrap" {
     try std.testing.fuzz({}, unwrapFuzz, .{ .corpus = &seeds_unwrap });
 }
 
-test "fuzz: pbkw v4 wrap/unwrap round-trip" {
-    try std.testing.fuzz({}, roundTripV4Fuzz, .{});
+test "fuzz: pbkw k3.local-pw wrap/unwrap round-trip" {
+    try std.testing.fuzz({}, roundTripV3LocalFuzz, .{});
 }
 
-test "fuzz: pbkw v3 wrap/unwrap round-trip" {
-    try std.testing.fuzz({}, roundTripV3Fuzz, .{});
+test "fuzz: pbkw k3.secret-pw wrap/unwrap round-trip" {
+    try std.testing.fuzz({}, roundTripV3SecretFuzz, .{});
+}
+
+test "fuzz: pbkw k4.local-pw wrap/unwrap round-trip" {
+    try std.testing.fuzz({}, roundTripV4LocalFuzz, .{});
+}
+
+test "fuzz: pbkw k4.secret-pw wrap/unwrap round-trip" {
+    try std.testing.fuzz({}, roundTripV4SecretFuzz, .{});
 }
 
 test "pbkw: wrapV4 rejects non-kib-aligned memlimit" {
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x11} ** 32;
+    const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(paseto.Error.WeakParameters, paseto.paserk.pbkw.wrapV4(
         allocator,
         .local,
@@ -56,8 +60,8 @@ test "pbkw: wrapV4 rejects non-kib-aligned memlimit" {
         &key,
         .{
             .params = .{ .memlimit_bytes = 1500, .opslimit = 2, .para = 1 },
-            .salt = [_]u8{0x22} ** 16,
-            .nonce = [_]u8{0x33} ** 24,
+            .salt = @as([16]u8, @splat(0x22)),
+            .nonce = @as([24]u8, @splat(0x33)),
         },
     ));
 }
@@ -79,58 +83,82 @@ fn unwrapFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     try std.testing.expect(out.bytes.len > 0);
 }
 
-fn roundTripV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
+fn roundTripV4LocalFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    try roundTripV4Kind(.local, s);
+}
+
+fn roundTripV4SecretFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    try roundTripV4Kind(.secret, s);
+}
+
+fn roundTripV4Kind(kind: paseto.paserk.pbkw.Kind, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
 
     var pw_buf: [32]u8 = undefined;
     const pw_n = s.slice(&pw_buf);
     const password = pw_buf[0..pw_n];
 
-    var ptk: [32]u8 = undefined;
-    s.bytes(&ptk);
+    const ptk_len: usize = switch (kind) {
+        .local => 32,
+        .secret => 64,
+    };
+    var ptk: [64]u8 = undefined;
+    s.bytes(ptk[0..ptk_len]);
     var salt: [16]u8 = undefined;
     s.bytes(&salt);
     var nonce: [24]u8 = undefined;
     s.bytes(&nonce);
 
-    const wrapped = paseto.paserk.pbkw.wrapV4(allocator, .local, password, &ptk, .{
+    const wrapped = try paseto.paserk.pbkw.wrapV4(allocator, kind, password, ptk[0..ptk_len], .{
         .params = support.PbkwV4FuzzParams,
         .salt = salt,
         .nonce = nonce,
-    }) catch |err| {
-        return support.expectAllowed(err, &wrap_errors);
-    };
+    });
     defer allocator.free(wrapped);
 
     var unwrapped = try paseto.paserk.pbkw.unwrap(allocator, password, wrapped);
     defer unwrapped.deinit();
-    try std.testing.expectEqualSlices(u8, &ptk, unwrapped.bytes);
+    try std.testing.expectEqual(.v4, unwrapped.version);
+    try std.testing.expectEqual(kind, unwrapped.kind);
+    try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], unwrapped.bytes);
 }
 
-fn roundTripV3Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
+fn roundTripV3LocalFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    try roundTripV3Kind(.local, s);
+}
+
+fn roundTripV3SecretFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    try roundTripV3Kind(.secret, s);
+}
+
+fn roundTripV3Kind(kind: paseto.paserk.pbkw.Kind, s: *std.testing.Smith) anyerror!void {
     const allocator = std.testing.allocator;
 
     var pw_buf: [32]u8 = undefined;
     const pw_n = s.slice(&pw_buf);
     const password = pw_buf[0..pw_n];
 
-    var ptk: [32]u8 = undefined;
-    s.bytes(&ptk);
+    const ptk_len: usize = switch (kind) {
+        .local => 32,
+        .secret => 48,
+    };
+    var ptk: [64]u8 = undefined;
+    s.bytes(ptk[0..ptk_len]);
     var salt: [32]u8 = undefined;
     s.bytes(&salt);
     var nonce: [16]u8 = undefined;
     s.bytes(&nonce);
 
-    const wrapped = paseto.paserk.pbkw.wrapV3(allocator, .local, password, &ptk, .{
+    const wrapped = try paseto.paserk.pbkw.wrapV3(allocator, kind, password, ptk[0..ptk_len], .{
         .params = support.PbkwV3FuzzParams,
         .salt = salt,
         .nonce = nonce,
-    }) catch |err| {
-        return support.expectAllowed(err, &wrap_errors);
-    };
+    });
     defer allocator.free(wrapped);
 
     var unwrapped = try paseto.paserk.pbkw.unwrap(allocator, password, wrapped);
     defer unwrapped.deinit();
-    try std.testing.expectEqualSlices(u8, &ptk, unwrapped.bytes);
+    try std.testing.expectEqual(.v3, unwrapped.version);
+    try std.testing.expectEqual(kind, unwrapped.kind);
+    try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], unwrapped.bytes);
 }

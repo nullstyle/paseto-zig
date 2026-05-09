@@ -30,6 +30,10 @@ test "fuzz: v4.Public constructors" {
     try std.testing.fuzz({}, ctorFuzz, .{});
 }
 
+test "fuzz: v4.Public wrong-key reject" {
+    try std.testing.fuzz({}, wrongKeyFuzz, .{});
+}
+
 fn verifyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     var tok_buf: [support.max_input_bytes]u8 = undefined;
     const n = s.slice(&tok_buf);
@@ -90,19 +94,61 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     var footer_buf: [64]u8 = undefined;
     const f_n = s.slice(&footer_buf);
     const footer = footer_buf[0..f_n];
+    var assertion_buf: [64]u8 = undefined;
+    const a_n = s.slice(&assertion_buf);
+    const assertion = assertion_buf[0..a_n];
 
-    const signed = try pk.sign(allocator, message, .{ .footer = footer });
+    const signed = try pk.sign(allocator, message, .{
+        .footer = footer,
+        .implicit_assertion = assertion,
+    });
     defer allocator.free(signed);
 
-    const mutation = support.pickMutation(s);
-    const tampered = try support.mutateToken(allocator, signed, mutation, s);
-    defer allocator.free(tampered);
+    for (support.token_mutation_classes) |mutation| {
+        const tampered = try support.mutateToken(allocator, signed, mutation, s);
+        defer allocator.free(tampered);
 
-    if (std.mem.eql(u8, tampered, signed)) return;
+        if (std.mem.eql(u8, tampered, signed)) continue;
 
-    if (pk.verify(allocator, tampered, "")) |ok| {
+        if (pk.verify(allocator, tampered, assertion)) |ok| {
+            allocator.free(ok);
+            return error.MutatedTokenShouldNotVerify;
+        } else |err| {
+            try support.expectAllowed(err, &support.public_verify_errors);
+        }
+    }
+}
+
+fn wrongKeyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    const allocator = std.testing.allocator;
+    var signer_seed: [32]u8 = undefined;
+    s.bytes(&signer_seed);
+    const signer = try paseto.v4.Public.fromSeed(&signer_seed);
+
+    var verifier_seed = signer_seed;
+    const wrong_idx = s.valueRangeLessThan(u64, 0, verifier_seed.len);
+    verifier_seed[@intCast(wrong_idx)] ^= 0xff;
+    const verifier = try paseto.v4.Public.fromSeed(&verifier_seed);
+
+    var msg_buf: [256]u8 = undefined;
+    const msg_n = s.slice(&msg_buf);
+    const message = msg_buf[0..msg_n];
+    var footer_buf: [64]u8 = undefined;
+    const f_n = s.slice(&footer_buf);
+    const footer = footer_buf[0..f_n];
+    var assertion_buf: [64]u8 = undefined;
+    const a_n = s.slice(&assertion_buf);
+    const assertion = assertion_buf[0..a_n];
+
+    const signed = try signer.sign(allocator, message, .{
+        .footer = footer,
+        .implicit_assertion = assertion,
+    });
+    defer allocator.free(signed);
+
+    if (verifier.verify(allocator, signed, assertion)) |ok| {
         allocator.free(ok);
-        return error.MutatedTokenShouldNotVerify;
+        return error.WrongKeyShouldNotVerify;
     } else |err| {
         try support.expectAllowed(err, &support.public_verify_errors);
     }
