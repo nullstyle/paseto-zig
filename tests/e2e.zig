@@ -67,7 +67,7 @@ test "v3.local encrypt round trip + wrapSecret" {
 
     // Wrap a fake 48-byte scalar (bytes don't need to be a valid P-384 scalar
     // for PIE to work, since it's just symmetric encryption).
-    const scalar = [_]u8{0x42} ** 48;
+    const scalar: [48]u8 = @splat(0x42);
     const wrapped = try key.wrapSecret(allocator, &scalar, .{});
     defer allocator.free(wrapped);
     var unwrapped = try key.unwrap(allocator, wrapped);
@@ -151,7 +151,8 @@ test "v4.local rejects wrong key" {
 
 test "v4.public rejects signature tampering" {
     const allocator = std.testing.allocator;
-    const signer = try paseto.v4.Public.fromSeed(&[_]u8{0} ** 32);
+    const seed: [32]u8 = @splat(0);
+    const signer = try paseto.v4.Public.fromSeed(&seed);
     const tok = try signer.sign(allocator, "msg", .{});
     defer allocator.free(tok);
 
