@@ -10,15 +10,25 @@ const paseto = @import("paseto");
 const support = @import("support.zig");
 
 const seeds = [_][]const u8{
+    // seed_01.bin -> local_round_trip
     @embedFile("corpus/scenarios/seed_01.bin"),
+    // seed_02.bin -> public_round_trip
     @embedFile("corpus/scenarios/seed_02.bin"),
+    // seed_03.bin -> local_mutation_reject
     @embedFile("corpus/scenarios/seed_03.bin"),
+    // seed_04.bin -> public_mutation_reject
     @embedFile("corpus/scenarios/seed_04.bin"),
+    // seed_05.bin -> paserk_key_round_trip
     @embedFile("corpus/scenarios/seed_05.bin"),
+    // seed_06.bin -> pie_round_trip
     @embedFile("corpus/scenarios/seed_06.bin"),
+    // seed_07.bin -> pke_round_trip
     @embedFile("corpus/scenarios/seed_07.bin"),
+    // seed_08.bin -> pbkw_round_trip
     @embedFile("corpus/scenarios/seed_08.bin"),
+    // seed_09.bin -> mixed_version_misuse
     @embedFile("corpus/scenarios/seed_09.bin"),
+    // seed_10.bin -> mixed_purpose_misuse
     @embedFile("corpus/scenarios/seed_10.bin"),
 };
 
@@ -35,51 +45,17 @@ const Family = enum {
     mixed_purpose_misuse,
 };
 
-const local_mutation_errors = [_]paseto.Error{
-    error.InvalidToken,
-    error.WrongPurpose,
-    error.InvalidAuthenticator,
-    error.MessageTooShort,
-    error.InvalidBase64,
-    error.InvalidPadding,
-    error.UnsupportedVersion,
-    error.UnsupportedPurpose,
-    error.OutOfMemory,
+const MismatchClass = enum {
+    wrong_version,
+    wrong_purpose,
+    wrong_key,
+    mutated_payload,
+    mutated_authenticator_signature,
+    malformed_framing,
 };
 
-const public_mutation_errors = [_]paseto.Error{
-    error.InvalidToken,
-    error.WrongPurpose,
-    error.InvalidSignature,
-    error.MessageTooShort,
-    error.InvalidBase64,
-    error.InvalidPadding,
-    error.UnsupportedVersion,
-    error.UnsupportedPurpose,
-    error.OutOfMemory,
-};
-
-const mixed_version_errors = [_]paseto.Error{
-    error.WrongPurpose,
-    error.InvalidEncoding,
-    error.UnsupportedVersion,
-    error.UnsupportedPurpose,
-    error.UnsupportedOperation,
-    error.InvalidToken,
-    error.InvalidAuthenticator,
-    error.InvalidSignature,
-    error.MessageTooShort,
-    error.OutOfMemory,
-};
-
-const mixed_purpose_errors = [_]paseto.Error{
-    error.WrongPurpose,
-    error.InvalidToken,
-    error.InvalidAuthenticator,
-    error.InvalidSignature,
-    error.MessageTooShort,
-    error.OutOfMemory,
-};
+const malformed_token_errors = [_]paseto.Error{error.InvalidToken};
+const misuse_errors = [_]paseto.Error{error.WrongPurpose};
 
 test "fuzz: scenario grammar" {
     try std.testing.fuzz({}, dispatch, .{ .corpus = &seeds });
@@ -112,6 +88,8 @@ fn runLocalRoundTrip(s: *std.testing.Smith) !void {
     const footer = footer_buf[0..s.slice(&footer_buf)];
     var assertion_buf: [64]u8 = undefined;
     const assertion = assertion_buf[0..s.slice(&assertion_buf)];
+    var nonce: [32]u8 = undefined;
+    s.bytes(&nonce);
 
     switch (version) {
         .v3 => {
@@ -119,6 +97,7 @@ fn runLocalRoundTrip(s: *std.testing.Smith) !void {
             const tok = try key.encrypt(allocator, msg, .{
                 .footer = footer,
                 .implicit_assertion = assertion,
+                .nonce = nonce,
             });
             defer allocator.free(tok);
             const out = try key.decrypt(allocator, tok, assertion);
@@ -130,6 +109,7 @@ fn runLocalRoundTrip(s: *std.testing.Smith) !void {
             const tok = try key.encrypt(allocator, msg, .{
                 .footer = footer,
                 .implicit_assertion = assertion,
+                .nonce = nonce,
             });
             defer allocator.free(tok);
             const out = try key.decrypt(allocator, tok, assertion);
@@ -153,7 +133,7 @@ fn runPublicRoundTrip(s: *std.testing.Smith) !void {
         .v3 => {
             var scalar: [48]u8 = undefined;
             s.bytes(&scalar);
-            const pk = paseto.v3.Public.fromScalarBytes(&scalar) catch return;
+            const pk = try support.deriveValidV3Public(scalar);
             const signed = try pk.sign(allocator, msg, .{ .footer = footer, .implicit_assertion = assertion });
             defer allocator.free(signed);
             const recovered = try pk.verify(allocator, signed, assertion);
@@ -176,39 +156,38 @@ fn runPublicRoundTrip(s: *std.testing.Smith) !void {
 fn runLocalMutationReject(s: *std.testing.Smith) !void {
     const allocator = std.testing.allocator;
     const version = s.value(paseto.Version);
+    const mismatch = s.value(MismatchClass);
     var key_buf: [32]u8 = undefined;
     s.bytes(&key_buf);
     var msg_buf: [128]u8 = undefined;
     const msg = msg_buf[0..s.slice(&msg_buf)];
     var footer_buf: [32]u8 = undefined;
     const footer = footer_buf[0..s.slice(&footer_buf)];
+    var assertion_buf: [32]u8 = undefined;
+    const assertion = assertion_buf[0..s.slice(&assertion_buf)];
+    var nonce: [32]u8 = undefined;
+    s.bytes(&nonce);
 
     switch (version) {
         .v3 => {
             const key = try paseto.v3.Local.fromBytes(&key_buf);
-            const tok = try key.encrypt(allocator, msg, .{ .footer = footer });
+            const tok = try key.encrypt(allocator, msg, .{
+                .footer = footer,
+                .implicit_assertion = assertion,
+                .nonce = nonce,
+            });
             defer allocator.free(tok);
-            const mutation = support.pickMutation(s);
-            const tampered = try support.mutateToken(allocator, tok, mutation, s);
-            defer allocator.free(tampered);
-            if (std.mem.eql(u8, tampered, tok)) return;
-            if (key.decrypt(allocator, tampered, "")) |ok| {
-                allocator.free(ok);
-                return error.MutatedTokenShouldNotDecrypt;
-            } else |err| try support.expectAllowed(err, &local_mutation_errors);
+            try exerciseLocalMismatchV3(allocator, s, key_buf, assertion, tok, mismatch);
         },
         .v4 => {
             const key = try paseto.v4.Local.fromBytes(&key_buf);
-            const tok = try key.encrypt(allocator, msg, .{ .footer = footer });
+            const tok = try key.encrypt(allocator, msg, .{
+                .footer = footer,
+                .implicit_assertion = assertion,
+                .nonce = nonce,
+            });
             defer allocator.free(tok);
-            const mutation = support.pickMutation(s);
-            const tampered = try support.mutateToken(allocator, tok, mutation, s);
-            defer allocator.free(tampered);
-            if (std.mem.eql(u8, tampered, tok)) return;
-            if (key.decrypt(allocator, tampered, "")) |ok| {
-                allocator.free(ok);
-                return error.MutatedTokenShouldNotDecrypt;
-            } else |err| try support.expectAllowed(err, &local_mutation_errors);
+            try exerciseLocalMismatchV4(allocator, s, key_buf, assertion, tok, mismatch);
         },
     }
 }
@@ -216,41 +195,36 @@ fn runLocalMutationReject(s: *std.testing.Smith) !void {
 fn runPublicMutationReject(s: *std.testing.Smith) !void {
     const allocator = std.testing.allocator;
     const version = s.value(paseto.Version);
+    const mismatch = s.value(MismatchClass);
     var msg_buf: [128]u8 = undefined;
     const msg = msg_buf[0..s.slice(&msg_buf)];
     var footer_buf: [32]u8 = undefined;
     const footer = footer_buf[0..s.slice(&footer_buf)];
+    var assertion_buf: [32]u8 = undefined;
+    const assertion = assertion_buf[0..s.slice(&assertion_buf)];
 
     switch (version) {
         .v3 => {
             var scalar: [48]u8 = undefined;
             s.bytes(&scalar);
-            const pk = paseto.v3.Public.fromScalarBytes(&scalar) catch return;
-            const tok = try pk.sign(allocator, msg, .{ .footer = footer });
+            const pk = try support.deriveValidV3Public(scalar);
+            const tok = try pk.sign(allocator, msg, .{
+                .footer = footer,
+                .implicit_assertion = assertion,
+            });
             defer allocator.free(tok);
-            const mutation = support.pickMutation(s);
-            const tampered = try support.mutateToken(allocator, tok, mutation, s);
-            defer allocator.free(tampered);
-            if (std.mem.eql(u8, tampered, tok)) return;
-            if (pk.verify(allocator, tampered, "")) |ok| {
-                allocator.free(ok);
-                return error.MutatedTokenShouldNotVerify;
-            } else |err| try support.expectAllowed(err, &public_mutation_errors);
+            try exercisePublicMismatchV3(allocator, s, scalar, assertion, tok, mismatch);
         },
         .v4 => {
             var seed: [32]u8 = undefined;
             s.bytes(&seed);
             const pk = try paseto.v4.Public.fromSeed(&seed);
-            const tok = try pk.sign(allocator, msg, .{ .footer = footer });
+            const tok = try pk.sign(allocator, msg, .{
+                .footer = footer,
+                .implicit_assertion = assertion,
+            });
             defer allocator.free(tok);
-            const mutation = support.pickMutation(s);
-            const tampered = try support.mutateToken(allocator, tok, mutation, s);
-            defer allocator.free(tampered);
-            if (std.mem.eql(u8, tampered, tok)) return;
-            if (pk.verify(allocator, tampered, "")) |ok| {
-                allocator.free(ok);
-                return error.MutatedTokenShouldNotVerify;
-            } else |err| try support.expectAllowed(err, &public_mutation_errors);
+            try exercisePublicMismatchV4(allocator, s, seed, assertion, tok, mismatch);
         },
     }
 }
@@ -318,11 +292,16 @@ fn runPkeRoundTrip(s: *std.testing.Smith) !void {
     s.bytes(&ptk);
     switch (version) {
         .v3 => {
-            var scalar: [48]u8 = undefined;
-            s.bytes(&scalar);
-            const pk = paseto.v3.Public.fromScalarBytes(&scalar) catch return;
+            var scalar_seed: [48]u8 = undefined;
+            s.bytes(&scalar_seed);
+            const pk = try support.deriveValidV3Public(scalar_seed);
+            const scalar = pk.secretBytes() orelse unreachable;
             const compressed = pk.publicCompressed();
-            const sealed = paseto.paserk.pke.sealV3(allocator, &compressed, &ptk, null) catch return;
+            var ephemeral_seed: [48]u8 = undefined;
+            s.bytes(&ephemeral_seed);
+            const ephemeral = try support.deriveValidV3Public(ephemeral_seed);
+            const ephemeral_scalar = ephemeral.secretBytes() orelse unreachable;
+            const sealed = try paseto.paserk.pke.sealV3(allocator, &compressed, &ptk, ephemeral_scalar);
             defer allocator.free(sealed);
             const out = try paseto.paserk.pke.unsealV3(allocator, scalar, sealed);
             defer allocator.free(out);
@@ -333,7 +312,12 @@ fn runPkeRoundTrip(s: *std.testing.Smith) !void {
             s.bytes(&seed);
             const pk = try paseto.v4.Public.fromSeed(&seed);
             const recipient_pub = pk.publicKeyBytes();
-            const sealed = try paseto.paserk.pke.sealV4(allocator, recipient_pub, &ptk, null);
+            var ephemeral: [32]u8 = undefined;
+            s.bytes(&ephemeral);
+            ephemeral[0] &= 248;
+            ephemeral[31] &= 127;
+            ephemeral[31] |= 64;
+            const sealed = try paseto.paserk.pke.sealV4(allocator, recipient_pub, &ptk, ephemeral);
             defer allocator.free(sealed);
             const out = try paseto.paserk.pke.unsealV4(allocator, seed, sealed);
             defer allocator.free(out);
@@ -411,7 +395,7 @@ fn runMixedVersionMisuse(s: *std.testing.Smith) !void {
         if (v3k.decrypt(allocator, tok, "")) |ok| {
             allocator.free(ok);
             return error.MixedVersionShouldNotDecrypt;
-        } else |err| try support.expectAllowed(err, &mixed_version_errors);
+        } else |err| try support.expectAllowed(err, &misuse_errors);
     } else {
         const v3k = try paseto.v3.Local.fromBytes(&key_buf);
         const tok = try v3k.encrypt(allocator, msg, .{});
@@ -420,7 +404,7 @@ fn runMixedVersionMisuse(s: *std.testing.Smith) !void {
         if (v4k.decrypt(allocator, tok, "")) |ok| {
             allocator.free(ok);
             return error.MixedVersionShouldNotDecrypt;
-        } else |err| try support.expectAllowed(err, &mixed_version_errors);
+        } else |err| try support.expectAllowed(err, &misuse_errors);
     }
 }
 
@@ -445,7 +429,7 @@ fn runMixedPurposeMisuse(s: *std.testing.Smith) !void {
             if (pk.verify(allocator, tok, "")) |ok| {
                 allocator.free(ok);
                 return error.MixedPurposeShouldNotVerify;
-            } else |err| try support.expectAllowed(err, &mixed_purpose_errors);
+            } else |err| try support.expectAllowed(err, &misuse_errors);
         },
         .v3 => {
             var key_buf: [32]u8 = undefined;
@@ -456,11 +440,263 @@ fn runMixedPurposeMisuse(s: *std.testing.Smith) !void {
 
             var scalar: [48]u8 = undefined;
             s.bytes(&scalar);
-            const pk = paseto.v3.Public.fromScalarBytes(&scalar) catch return;
+            const pk = try support.deriveValidV3Public(scalar);
             if (pk.verify(allocator, tok, "")) |ok| {
                 allocator.free(ok);
                 return error.MixedPurposeShouldNotVerify;
-            } else |err| try support.expectAllowed(err, &mixed_purpose_errors);
+            } else |err| try support.expectAllowed(err, &misuse_errors);
         },
     }
+}
+
+fn exerciseLocalMismatchV3(
+    allocator: std.mem.Allocator,
+    s: *std.testing.Smith,
+    key_buf: [32]u8,
+    assertion: []const u8,
+    tok: []const u8,
+    mismatch: MismatchClass,
+) !void {
+    const key = try paseto.v3.Local.fromBytes(&key_buf);
+    switch (mismatch) {
+        .wrong_version => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v4, .local);
+            defer allocator.free(tampered);
+            try expectLocalRejectV3(key, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_purpose => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v3, .public);
+            defer allocator.free(tampered);
+            try expectLocalRejectV3(key, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_key => {
+            var wrong_key_buf = key_buf;
+            wrong_key_buf[0] ^= 0xff;
+            const wrong_key = try paseto.v3.Local.fromBytes(&wrong_key_buf);
+            try expectLocalRejectV3(wrong_key, tok, assertion, error.InvalidAuthenticator);
+        },
+        .mutated_payload => {
+            const tampered = try support.mutateToken(allocator, tok, .payload_byte, s);
+            defer allocator.free(tampered);
+            try expectLocalRejectV3(key, tampered, assertion, error.InvalidAuthenticator);
+        },
+        .mutated_authenticator_signature => {
+            const tampered = try support.mutateToken(allocator, tok, .authenticator_byte, s);
+            defer allocator.free(tampered);
+            try expectLocalRejectV3(key, tampered, assertion, error.InvalidAuthenticator);
+        },
+        .malformed_framing => {
+            const tampered = try makeMalformedToken(allocator, tok);
+            defer allocator.free(tampered);
+            try expectLocalRejectV3Allowed(key, tampered, assertion, &malformed_token_errors);
+        },
+    }
+}
+
+fn exerciseLocalMismatchV4(
+    allocator: std.mem.Allocator,
+    s: *std.testing.Smith,
+    key_buf: [32]u8,
+    assertion: []const u8,
+    tok: []const u8,
+    mismatch: MismatchClass,
+) !void {
+    const key = try paseto.v4.Local.fromBytes(&key_buf);
+    switch (mismatch) {
+        .wrong_version => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v3, .local);
+            defer allocator.free(tampered);
+            try expectLocalRejectV4(key, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_purpose => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v4, .public);
+            defer allocator.free(tampered);
+            try expectLocalRejectV4(key, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_key => {
+            var wrong_key_buf = key_buf;
+            wrong_key_buf[0] ^= 0xff;
+            const wrong_key = try paseto.v4.Local.fromBytes(&wrong_key_buf);
+            try expectLocalRejectV4(wrong_key, tok, assertion, error.InvalidAuthenticator);
+        },
+        .mutated_payload => {
+            const tampered = try support.mutateToken(allocator, tok, .payload_byte, s);
+            defer allocator.free(tampered);
+            try expectLocalRejectV4(key, tampered, assertion, error.InvalidAuthenticator);
+        },
+        .mutated_authenticator_signature => {
+            const tampered = try support.mutateToken(allocator, tok, .authenticator_byte, s);
+            defer allocator.free(tampered);
+            try expectLocalRejectV4(key, tampered, assertion, error.InvalidAuthenticator);
+        },
+        .malformed_framing => {
+            const tampered = try makeMalformedToken(allocator, tok);
+            defer allocator.free(tampered);
+            try expectLocalRejectV4Allowed(key, tampered, assertion, &malformed_token_errors);
+        },
+    }
+}
+
+fn exercisePublicMismatchV3(
+    allocator: std.mem.Allocator,
+    s: *std.testing.Smith,
+    signer_scalar: [48]u8,
+    assertion: []const u8,
+    tok: []const u8,
+    mismatch: MismatchClass,
+) !void {
+    const signer = try support.deriveValidV3Public(signer_scalar);
+    switch (mismatch) {
+        .wrong_version => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v4, .public);
+            defer allocator.free(tampered);
+            try expectPublicRejectV3(signer, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_purpose => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v3, .local);
+            defer allocator.free(tampered);
+            try expectPublicRejectV3(signer, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_key => {
+            var verifier_seed = signer_scalar;
+            verifier_seed[0] ^= 0xff;
+            const verifier = try support.deriveDistinctValidV3Public(verifier_seed, signer.publicCompressed());
+            try expectPublicRejectV3(verifier, tok, assertion, error.InvalidSignature);
+        },
+        .mutated_payload => {
+            const tampered = try support.mutateToken(allocator, tok, .payload_byte, s);
+            defer allocator.free(tampered);
+            try expectPublicRejectV3(signer, tampered, assertion, error.InvalidSignature);
+        },
+        .mutated_authenticator_signature => {
+            const tampered = try support.mutateToken(allocator, tok, .authenticator_byte, s);
+            defer allocator.free(tampered);
+            try expectPublicRejectV3(signer, tampered, assertion, error.InvalidSignature);
+        },
+        .malformed_framing => {
+            const tampered = try makeMalformedToken(allocator, tok);
+            defer allocator.free(tampered);
+            try expectPublicRejectV3Allowed(signer, tampered, assertion, &malformed_token_errors);
+        },
+    }
+}
+
+fn exercisePublicMismatchV4(
+    allocator: std.mem.Allocator,
+    s: *std.testing.Smith,
+    seed: [32]u8,
+    assertion: []const u8,
+    tok: []const u8,
+    mismatch: MismatchClass,
+) !void {
+    const signer = try paseto.v4.Public.fromSeed(&seed);
+    switch (mismatch) {
+        .wrong_version => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v3, .public);
+            defer allocator.free(tampered);
+            try expectPublicRejectV4(signer, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_purpose => {
+            const tampered = try rewriteTokenHeader(allocator, tok, .v4, .local);
+            defer allocator.free(tampered);
+            try expectPublicRejectV4(signer, tampered, assertion, error.WrongPurpose);
+        },
+        .wrong_key => {
+            var other_seed = seed;
+            other_seed[0] ^= 0xff;
+            const verifier = try paseto.v4.Public.fromSeed(&other_seed);
+            try expectPublicRejectV4(verifier, tok, assertion, error.InvalidSignature);
+        },
+        .mutated_payload => {
+            const tampered = try support.mutateToken(allocator, tok, .payload_byte, s);
+            defer allocator.free(tampered);
+            try expectPublicRejectV4(signer, tampered, assertion, error.InvalidSignature);
+        },
+        .mutated_authenticator_signature => {
+            const tampered = try support.mutateToken(allocator, tok, .authenticator_byte, s);
+            defer allocator.free(tampered);
+            try expectPublicRejectV4(signer, tampered, assertion, error.InvalidSignature);
+        },
+        .malformed_framing => {
+            const tampered = try makeMalformedToken(allocator, tok);
+            defer allocator.free(tampered);
+            try expectPublicRejectV4Allowed(signer, tampered, assertion, &malformed_token_errors);
+        },
+    }
+}
+
+fn makeMalformedToken(allocator: std.mem.Allocator, tok: []const u8) ![]u8 {
+    const suffix = ".Zm9v.Zm9v";
+    const out = try allocator.alloc(u8, tok.len + suffix.len);
+    errdefer allocator.free(out);
+    @memcpy(out[0..tok.len], tok);
+    @memcpy(out[tok.len..], suffix);
+    return out;
+}
+
+fn rewriteTokenHeader(
+    allocator: std.mem.Allocator,
+    tok: []const u8,
+    version: paseto.Version,
+    purpose: paseto.Purpose,
+) ![]u8 {
+    var parsed = try paseto.token.parse(allocator, tok);
+    defer parsed.deinit();
+    return try paseto.token.serialize(allocator, version, purpose, parsed.payload, parsed.footer);
+}
+
+fn expectLocalRejectV3(key: paseto.v3.Local, tok: []const u8, assertion: []const u8, expected: paseto.Error) !void {
+    if (key.decrypt(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedLocalReject;
+    } else |err| try std.testing.expectEqual(expected, err);
+}
+
+fn expectLocalRejectV4(key: paseto.v4.Local, tok: []const u8, assertion: []const u8, expected: paseto.Error) !void {
+    if (key.decrypt(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedLocalReject;
+    } else |err| try std.testing.expectEqual(expected, err);
+}
+
+fn expectLocalRejectV3Allowed(key: paseto.v3.Local, tok: []const u8, assertion: []const u8, allowed: []const paseto.Error) !void {
+    if (key.decrypt(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedLocalReject;
+    } else |err| try support.expectAllowed(err, allowed);
+}
+
+fn expectLocalRejectV4Allowed(key: paseto.v4.Local, tok: []const u8, assertion: []const u8, allowed: []const paseto.Error) !void {
+    if (key.decrypt(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedLocalReject;
+    } else |err| try support.expectAllowed(err, allowed);
+}
+
+fn expectPublicRejectV3(key: paseto.v3.Public, tok: []const u8, assertion: []const u8, expected: paseto.Error) !void {
+    if (key.verify(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedPublicReject;
+    } else |err| try std.testing.expectEqual(expected, err);
+}
+
+fn expectPublicRejectV4(key: paseto.v4.Public, tok: []const u8, assertion: []const u8, expected: paseto.Error) !void {
+    if (key.verify(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedPublicReject;
+    } else |err| try std.testing.expectEqual(expected, err);
+}
+
+fn expectPublicRejectV3Allowed(key: paseto.v3.Public, tok: []const u8, assertion: []const u8, allowed: []const paseto.Error) !void {
+    if (key.verify(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedPublicReject;
+    } else |err| try support.expectAllowed(err, allowed);
+}
+
+fn expectPublicRejectV4Allowed(key: paseto.v4.Public, tok: []const u8, assertion: []const u8, allowed: []const paseto.Error) !void {
+    if (key.verify(std.testing.allocator, tok, assertion)) |ok| {
+        std.testing.allocator.free(ok);
+        return error.ExpectedPublicReject;
+    } else |err| try support.expectAllowed(err, allowed);
 }
