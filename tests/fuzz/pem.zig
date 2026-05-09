@@ -10,6 +10,7 @@ const seeds = [_][]const u8{
     @embedFile("corpus/pem/v4_public.bin"),
     @embedFile("corpus/pem/v4_private.bin"),
     @embedFile("corpus/pem/v3_ec_private.bin"),
+    @embedFile("corpus/pem/v3_public.bin"),
     @embedFile("corpus/pem/leading_garbage.bin"),
     @embedFile("corpus/pem/trailing_garbage.bin"),
     @embedFile("corpus/pem/concatenated.bin"),
@@ -50,7 +51,7 @@ fn pemToDerFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     defer allocator.free(out.der);
 
     try std.testing.expect(out.der.len > 0);
-    try std.testing.expect(hasKnownPemTag(input));
+    try std.testing.expect(isKnownPemLabel(@tagName(out.label)));
 }
 
 fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -67,6 +68,7 @@ fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     const der = try paseto.pem.pemToDer(allocator, input);
     defer allocator.free(der.der);
+    const label_name = @tagName(der.label);
 
     const expected: usize = switch (parsed.format) {
         .ed25519_seed => 32,
@@ -76,19 +78,19 @@ fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     };
     try std.testing.expectEqual(expected, parsed.bytes.len);
 
-    if (std.mem.indexOf(u8, input, "-----BEGIN EC PRIVATE KEY-----") != null) {
+    if (std.mem.eql(u8, label_name, "ec_private_key")) {
         try std.testing.expectEqual(paseto.pem.KeyFormat.p384_scalar, parsed.format);
-    } else if (std.mem.indexOf(u8, input, "-----BEGIN PRIVATE KEY-----") != null) {
+    } else if (std.mem.eql(u8, label_name, "private_key")) {
         try std.testing.expect(parsed.format == .ed25519_seed or parsed.format == .p384_scalar);
-    } else if (std.mem.indexOf(u8, input, "-----BEGIN PUBLIC KEY-----") != null) {
+    } else if (std.mem.eql(u8, label_name, "public_key")) {
         try std.testing.expect(parsed.format == .ed25519_public or parsed.format == .p384_public_compressed);
     } else {
         return error.UnexpectedPemParseSuccess;
     }
 }
 
-fn hasKnownPemTag(input: []const u8) bool {
-    return std.mem.indexOf(u8, input, "-----BEGIN PRIVATE KEY-----") != null or
-        std.mem.indexOf(u8, input, "-----BEGIN PUBLIC KEY-----") != null or
-        std.mem.indexOf(u8, input, "-----BEGIN EC PRIVATE KEY-----") != null;
+fn isKnownPemLabel(label_name: []const u8) bool {
+    return std.mem.eql(u8, label_name, "private_key") or
+        std.mem.eql(u8, label_name, "public_key") or
+        std.mem.eql(u8, label_name, "ec_private_key");
 }

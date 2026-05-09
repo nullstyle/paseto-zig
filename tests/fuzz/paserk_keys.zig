@@ -8,6 +8,10 @@ const support = @import("support.zig");
 const seeds = [_][]const u8{
     @embedFile("corpus/paserk_keys/k4_local_valid.bin"),
     @embedFile("corpus/paserk_keys/k3_local_valid.bin"),
+    @embedFile("corpus/paserk_keys/k4_public_valid.bin"),
+    @embedFile("corpus/paserk_keys/k3_public_valid.bin"),
+    @embedFile("corpus/paserk_keys/k4_secret_valid.bin"),
+    @embedFile("corpus/paserk_keys/k3_secret_valid.bin"),
     @embedFile("corpus/paserk_keys/wrong_length.bin"),
     @embedFile("corpus/paserk_keys/bad_prefix.bin"),
     @embedFile("corpus/paserk_keys/bad_kind.bin"),

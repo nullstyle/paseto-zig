@@ -1,5 +1,5 @@
 //! Fuzz harness for `src/paserk/id.zig`. Sub-targets:
-//!   - `compute` on arbitrary bytes (tolerated: InvalidKey | OutOfMemory)
+//!   - `compute` on arbitrary bytes (tolerated: InvalidKey)
 //!   - Valid-length inputs: result carries the correct prefix and repeated
 //!     calls are byte-for-byte deterministic
 
