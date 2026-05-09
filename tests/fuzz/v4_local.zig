@@ -13,19 +13,6 @@ const seeds_decrypt = [_][]const u8{
     @embedFile("corpus/v4_local/wrong_purpose.bin"),
 };
 
-const decrypt_errors = [_]paseto.Error{
-    error.InvalidToken,
-    error.WrongPurpose,
-    error.InvalidAuthenticator,
-    error.MessageTooShort,
-    error.InvalidKey,
-    error.InvalidBase64,
-    error.InvalidPadding,
-    error.UnsupportedVersion,
-    error.UnsupportedPurpose,
-    error.OutOfMemory,
-};
-
 test "fuzz: v4.Local.decrypt" {
     try std.testing.fuzz({}, decryptFuzz, .{ .corpus = &seeds_decrypt });
 }
@@ -53,7 +40,7 @@ fn decryptFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     const allocator = std.testing.allocator;
     const out = key.decrypt(allocator, token_str, assertion) catch |err| {
-        return support.expectAllowed(err, &decrypt_errors);
+        return support.expectAllowed(err, &support.local_decrypt_errors);
     };
     defer allocator.free(out);
 }
@@ -118,6 +105,6 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         allocator.free(ok);
         return error.MutatedTokenShouldNotDecrypt;
     } else |err| {
-        try support.expectAllowed(err, &decrypt_errors);
+        try support.expectAllowed(err, &support.local_decrypt_errors);
     }
 }

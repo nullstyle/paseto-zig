@@ -122,16 +122,13 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     defer allocator.free(wrapped);
     if (wrapped.len == 0) return;
 
-    const tampered = try allocator.dupe(u8, wrapped);
+    const prefix = switch (version) {
+        .v3 => "k3.local-wrap.pie.",
+        .v4 => "k4.local-wrap.pie.",
+    };
+    const tampered = try support.mutatePaserkBody(allocator, wrapped, prefix, s);
     defer allocator.free(tampered);
-
-    // Flip a byte strictly inside the body (past the "k{3,4}.local-wrap.pie."
-    // header). The header has 18 ASCII chars — guard if the whole string is
-    // somehow shorter.
-    const header_len: usize = if (version == .v4) 18 else 18; // identical for v3/v4
-    if (tampered.len <= header_len) return;
-    const body_idx = s.valueRangeLessThan(u64, @intCast(header_len), @intCast(tampered.len));
-    tampered[@intCast(body_idx)] ^= 0xff;
+    if (std.mem.eql(u8, tampered, wrapped)) return;
 
     if (paseto.paserk.pie.unwrap(allocator, &wrapping, tampered)) |ok| {
         var mut = ok;

@@ -155,3 +155,59 @@ pub const token_parse_errors = [_]paseto.Error{
     error.InvalidPadding,
     error.OutOfMemory,
 };
+
+/// Shared allowlist for `v3.Local.decrypt` / `v4.Local.decrypt` and the
+/// mutation-reject checks that exercise the same boundary.
+pub const local_decrypt_errors = [_]paseto.Error{
+    error.InvalidToken,
+    error.WrongPurpose,
+    error.InvalidAuthenticator,
+    error.MessageTooShort,
+    error.InvalidKey,
+    error.InvalidBase64,
+    error.InvalidPadding,
+    error.UnsupportedVersion,
+    error.UnsupportedPurpose,
+    error.OutOfMemory,
+};
+
+/// Shared allowlist for `v3.Public.verify` / `v4.Public.verify` and the
+/// associated mutation-reject checks.
+pub const public_verify_errors = [_]paseto.Error{
+    error.InvalidToken,
+    error.WrongPurpose,
+    error.InvalidSignature,
+    error.InvalidKey,
+    error.InvalidKeyPair,
+    error.MessageTooShort,
+    error.InvalidBase64,
+    error.InvalidPadding,
+    error.UnsupportedVersion,
+    error.UnsupportedPurpose,
+    error.OutOfMemory,
+};
+
+/// Shared constructor contract for v3/v4 public-key entrypoints that accept
+/// arbitrary byte material.
+pub const public_ctor_errors = [_]paseto.Error{
+    error.InvalidKey,
+    error.InvalidKeyPair,
+    error.OutOfMemory,
+};
+
+/// Mutates a PASERK body byte while preserving the textual prefix. Returns an
+/// allocator-owned duplicate; if there is no body byte to mutate yet, the
+/// duplicate is returned unchanged so the caller can treat it as a no-op case.
+pub fn mutatePaserkBody(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    prefix: []const u8,
+    s: *std.testing.Smith,
+) ![]u8 {
+    const out = try allocator.dupe(u8, value);
+    errdefer allocator.free(out);
+    if (!std.mem.startsWith(u8, out, prefix) or out.len <= prefix.len) return out;
+    const idx = s.valueRangeLessThan(u64, @intCast(prefix.len), @intCast(out.len));
+    out[@intCast(idx)] ^= 0xff;
+    return out;
+}

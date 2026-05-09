@@ -154,11 +154,9 @@ fn mutationV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     defer allocator.free(sealed);
     if (sealed.len <= 8) return; // need at least header + a body byte
 
-    const tampered = try allocator.dupe(u8, sealed);
+    const tampered = try support.mutatePaserkBody(allocator, sealed, "k4.seal.", s);
     defer allocator.free(tampered);
-    const header_len: usize = 8; // "k4.seal."
-    const idx = s.valueRangeLessThan(u64, @intCast(header_len), @intCast(tampered.len));
-    tampered[@intCast(idx)] ^= 0xff;
+    if (std.mem.eql(u8, tampered, sealed)) return;
 
     if (paseto.paserk.pke.unsealV4(allocator, seed, tampered)) |ok| {
         allocator.free(ok);

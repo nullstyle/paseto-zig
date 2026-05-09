@@ -16,26 +16,6 @@ const seeds_verify = [_][]const u8{
     @embedFile("corpus/v3_public/wrong_purpose.bin"),
 };
 
-const verify_errors = [_]paseto.Error{
-    error.InvalidToken,
-    error.WrongPurpose,
-    error.InvalidSignature,
-    error.InvalidKey,
-    error.InvalidKeyPair,
-    error.MessageTooShort,
-    error.InvalidBase64,
-    error.InvalidPadding,
-    error.UnsupportedVersion,
-    error.UnsupportedPurpose,
-    error.OutOfMemory,
-};
-
-const ctor_errors = [_]paseto.Error{
-    error.InvalidKey,
-    error.InvalidKeyPair,
-    error.OutOfMemory,
-};
-
 test "fuzz: v3.Public.verify" {
     try std.testing.fuzz({}, verifyFuzz, .{ .corpus = &seeds_verify });
 }
@@ -66,7 +46,7 @@ fn verifyFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     const allocator = std.testing.allocator;
     const out = pk.verify(allocator, token_str, assertion_buf[0..a_n]) catch |err| {
-        return support.expectAllowed(err, &verify_errors);
+        return support.expectAllowed(err, &support.public_verify_errors);
     };
     defer allocator.free(out);
 }
@@ -124,7 +104,7 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         allocator.free(ok);
         return error.MutatedTokenShouldNotVerify;
     } else |err| {
-        try support.expectAllowed(err, &verify_errors);
+        try support.expectAllowed(err, &support.public_verify_errors);
     }
 }
 
@@ -137,22 +117,22 @@ fn ctorFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     switch (choice) {
         0 => {
             _ = paseto.v3.Public.fromScalarBytes(bytes) catch |err| {
-                return support.expectAllowed(err, &ctor_errors);
+                return support.expectAllowed(err, &support.public_ctor_errors);
             };
         },
         1 => {
             _ = paseto.v3.Public.fromPublicBytesCompressed(bytes) catch |err| {
-                return support.expectAllowed(err, &ctor_errors);
+                return support.expectAllowed(err, &support.public_ctor_errors);
             };
         },
         2 => {
             _ = paseto.v3.Public.fromPublicBytesUncompressed(bytes) catch |err| {
-                return support.expectAllowed(err, &ctor_errors);
+                return support.expectAllowed(err, &support.public_ctor_errors);
             };
         },
         3 => {
             _ = paseto.v3.Public.fromPublicBytes(bytes) catch |err| {
-                return support.expectAllowed(err, &ctor_errors);
+                return support.expectAllowed(err, &support.public_ctor_errors);
             };
         },
         else => unreachable,
