@@ -63,13 +63,14 @@ pub fn build(b: *std.Build) void {
     // Every harness is registered via `addFuzzHarness`, which attaches the
     // harness to its group step, the aggregate `fuzz-all` step, and a
     // dedicated `fuzz-<name>` step so developers can target one harness at
-    // a time. Harnesses run seed-only today — Zig 0.16.0's stdlib test
-    // runner fails to compile with `-ffuzz`, so `--fuzz` is blocked until
-    // upstream patches that.
-    const fuzz_all_step = b.step("fuzz-all", "Run the full fuzz suite (seed-only)");
-    const fuzz_parsers_step = b.step("fuzz-parsers", "Run parser-group fuzz harnesses");
-    const fuzz_envelopes_step = b.step("fuzz-envelopes", "Run envelope-group fuzz harnesses");
-    const fuzz_scenarios_step = b.step("fuzz-scenarios", "Run scenario-group fuzz harnesses");
+    // a time. Plain `zig build fuzz-...` runs each harness's test artifact
+    // once against its embedded corpus seeds. Add `--fuzz[=limit]` to enable
+    // Zig's builtin mutation engine, and `--webui` when interactive triage
+    // helps.
+    const fuzz_all_step = b.step("fuzz-all", "Run all fuzz harnesses (seed-only by default; add --fuzz for mutation)");
+    const fuzz_parsers_step = b.step("fuzz-parsers", "Run parser fuzz harnesses (seed-only by default; add --fuzz for mutation)");
+    const fuzz_envelopes_step = b.step("fuzz-envelopes", "Run envelope fuzz harnesses (seed-only by default; add --fuzz for mutation)");
+    const fuzz_scenarios_step = b.step("fuzz-scenarios", "Run scenario fuzz harnesses (seed-only by default; add --fuzz for mutation)");
 
     const fuzz_ctx: FuzzCtx = .{
         .b = b,
@@ -122,6 +123,6 @@ fn addFuzzHarness(
     group_step.dependOn(&run.step);
     if (group_step != ctx.all_step) ctx.all_step.dependOn(&run.step);
 
-    const own = ctx.b.step("fuzz-" ++ name, "Run the " ++ name ++ " fuzz harness");
+    const own = ctx.b.step("fuzz-" ++ name, "Run the " ++ name ++ " fuzz harness (seed-only by default; add --fuzz and optional --webui)");
     own.dependOn(&run.step);
 }

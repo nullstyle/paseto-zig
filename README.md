@@ -2,7 +2,7 @@
 
 A full-featured implementation of [PASETO](https://github.com/paseto-standard/paseto-spec)
 (Platform-Agnostic Security Tokens) and [PASERK](https://github.com/paseto-standard/paserk)
-(Platform-Agnostic Serialized Keys) for Zig `0.16.0`.
+(Platform-Agnostic Serialized Keys) for Zig `0.17.0-dev.256+04481c76c`.
 
 Supports PASETO `v3` (NIST Modern — AES-256-CTR, HMAC-SHA384, ECDSA P-384)
 and `v4` (Sodium Modern — XChaCha20, BLAKE2b-keyed, Ed25519), covering both
@@ -163,9 +163,9 @@ strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 
 ## Compatibility
 
-* **Zig:** `0.16.0` (uses the new `std.Io` interface and the `ArrayList`,
-  `Writergate`, and random-via-`Io` changes). Earlier versions are not
-  supported.
+* **Zig:** `0.17.0-dev.256+04481c76c` (the version currently validated for the
+  full test and builtin-fuzz workflow in this repository). Earlier versions
+  are not supported.
 * **Randomness:** library functions that need entropy (key / nonce / salt
   generation) draw from `std.Io.Threaded.global_single_threaded`, which is
   backed by the host operating system's CSPRNG. Callers who need their own
@@ -200,10 +200,17 @@ mixed-purpose misuse).
 Group steps:
 
 ```sh
-zig build fuzz-all         # full suite — runs every harness once per seed
-zig build fuzz-parsers     # parser harnesses only
-zig build fuzz-envelopes   # envelope + high-level API harnesses
-zig build fuzz-scenarios   # scenario grammar harness only
+zig build fuzz-all             # full suite, seed-only by default
+zig build fuzz-parsers --fuzz  # parser harnesses with mutation enabled
+zig build fuzz-envelopes --fuzz
+zig build fuzz-scenarios       # scenario grammar harness, seed-only by default
+```
+
+Focused runs and repros:
+
+```sh
+zig build fuzz-token --fuzz=1000
+zig build fuzz-scenario --fuzz=10000 --webui
 ```
 
 Per-harness targets for focused repro after a crash:
@@ -225,20 +232,25 @@ zig build fuzz-v3_public
 zig build fuzz-scenario
 ```
 
-### Current mode: seed-only
+Plain `zig build fuzz-...` runs a deterministic seed-only smoke pass: the
+harness test artifact executes once against its embedded corpus seeds and any
+wired regression inputs. Add `--fuzz[=limit]` to enable Zig's builtin mutation
+engine on top of that seeded startup. `--webui` is available with builtin fuzz
+mode and is especially useful for long-running scenario triage.
 
-Stock Zig `0.16.0` has a defect in `lib/compiler/test_runner.zig` (a
-`*builtin.StackTrace` vs `*const debug.StackTrace` mismatch in the fuzz
-error path) that blocks `-ffuzz` at comptime. The harnesses therefore run
-**seed-only**: each harness executes its embedded `@embedFile` corpus once
-per invocation. When upstream Zig ships a fix, `zig build <step> --fuzz[=limit]`
-and `--webui` become available with zero harness changes.
+Typical workflows:
+
+* Start with a deterministic smoke run: `zig build fuzz-token`
+* Stress one harness with mutations: `zig build fuzz-token --fuzz=1000`
+* Sweep a whole class of harnesses: `zig build fuzz-parsers --fuzz`
+* Exercise the envelope/API surface: `zig build fuzz-envelopes --fuzz`
+* Run the scenario grammar interactively: `zig build fuzz-scenario --fuzz=10000 --webui`
 
 ### Corpus and regression policy
 
 * Seed corpora live at `tests/fuzz/corpus/<harness>/*.bin`. Keep hand-curated
-  seeds small (~3–10 files per harness); bulk growth is the fuzz engine's
-  job once generative mode returns.
+  seeds small (~3–10 files per harness); each fuzz run starts from these
+  embedded corpus inputs before mutating.
 * Any reproducible crash found during a long run becomes either a permanent
   corpus seed under `tests/fuzz/corpus/<harness>/` or a deterministic
   regression input under `tests/fuzz/regressions/<harness>/`, then wired
@@ -253,7 +265,7 @@ and `--webui` become available with zero harness changes.
 
 ## Contributing
 
-1. Install Zig `0.16.0`.
+1. Install Zig `0.17.0-dev.256+04481c76c`.
 2. Clone with submodules if you want the Ruby reference (optional):
    ```sh
    git clone --recurse-submodules …
@@ -264,8 +276,9 @@ and `--webui` become available with zero harness changes.
 3. Make your change. Prefer narrowly-scoped commits with their own tests.
 4. Run `zig build test` and ensure the full suite is green before pushing.
 5. If your change touches parser / envelope / high-level code that already
-   has a fuzz harness, also run `zig build fuzz-all` seed-only before
-   pushing.
+   has a fuzz harness, also run `zig build fuzz-all` for the deterministic
+   seed-only sweep before pushing. Add `--fuzz[=limit]` and `--webui` when
+   you want mutation mode or interactive triage.
 
 ## Acknowledgements
 
