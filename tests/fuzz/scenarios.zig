@@ -197,7 +197,17 @@ fn runPublicMutationReject(s: *std.testing.Smith) !void {
     const version = s.value(paseto.Version);
     const mismatch = s.value(MismatchClass);
     var msg_buf: [128]u8 = undefined;
-    const msg = msg_buf[0..s.slice(&msg_buf)];
+    const msg_len = s.slice(&msg_buf);
+    if (mismatch == .mutated_payload and msg_len == 0) {
+        // Public tokens with empty messages have no payload bytes outside the
+        // signature/authenticator, so forcing one content byte keeps this
+        // mismatch class from degenerating into a no-op mutation.
+        msg_buf[0] = 0;
+    }
+    const msg = if (mismatch == .mutated_payload and msg_len == 0)
+        msg_buf[0..1]
+    else
+        msg_buf[0..msg_len];
     var footer_buf: [32]u8 = undefined;
     const footer = footer_buf[0..s.slice(&footer_buf)];
     var assertion_buf: [32]u8 = undefined;
