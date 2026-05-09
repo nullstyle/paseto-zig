@@ -21,7 +21,16 @@ const seeds_ts = [_][]const u8{
     @embedFile("corpus/claims/ts_impossible.bin"),
 };
 
-const validate_errors = [_]paseto.Error{
+const validate_default_errors = [_]paseto.Error{
+    error.InvalidJson,
+    error.InvalidClaim,
+    error.InvalidTime,
+    error.ExpiredToken,
+    error.InactiveToken,
+    error.ImmatureToken,
+};
+
+const validate_strict_errors = [_]paseto.Error{
     error.InvalidJson,
     error.InvalidClaim,
     error.InvalidTime,
@@ -32,12 +41,10 @@ const validate_errors = [_]paseto.Error{
     error.InvalidAudience,
     error.InvalidSubject,
     error.InvalidTokenIdentifier,
-    error.OutOfMemory,
 };
 
 const ts_errors = [_]paseto.Error{
     error.InvalidTime,
-    error.OutOfMemory,
 };
 
 test "fuzz: claims.Validator.validate" {
@@ -63,7 +70,7 @@ fn validateFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const outcome_a = v_default.validate(input, allocator);
     const outcome_b = v_default.validate(input, allocator);
     try assertSameOutcome(outcome_a, outcome_b);
-    if (outcome_a) |_| {} else |err| try support.expectAllowed(err, &validate_errors);
+    if (outcome_a) |_| {} else |err| try support.expectAllowed(err, &validate_default_errors);
 
     const v_strict: paseto.Validator = .{
         .require_issuer = true,
@@ -72,8 +79,16 @@ fn validateFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         .require_token_identifier = true,
         .now_override = 1_700_000_000,
     };
-    const outcome_strict = v_strict.validate(input, allocator);
-    if (outcome_strict) |_| {} else |err| try support.expectAllowed(err, &validate_errors);
+    const outcome_strict_a = v_strict.validate(input, allocator);
+    const outcome_strict_b = v_strict.validate(input, allocator);
+    try assertSameOutcome(outcome_strict_a, outcome_strict_b);
+    if (outcome_strict_a) |_| {} else |err| try support.expectAllowed(err, &validate_strict_errors);
+
+    if (outcome_a) |_| {
+        if (outcome_strict_a) |_| {} else |_| {}
+    } else |_| {
+        if (outcome_strict_a) |_| return error.StrictValidatorFixedRejection else |_| {}
+    }
 }
 
 fn timestampFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -82,9 +97,11 @@ fn timestampFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const input = buf[0..n];
 
     const value = std.json.Value{ .string = input };
-    _ = paseto.claims.parseIsoTimestamp(value) catch |err| {
+    const parsed_a = paseto.claims.parseIsoTimestamp(value) catch |err| {
         return support.expectAllowed(err, &ts_errors);
     };
+    const parsed_b = try paseto.claims.parseIsoTimestamp(value);
+    try std.testing.expectEqual(parsed_a, parsed_b);
 }
 
 fn assertSameOutcome(a: anyerror!void, b: anyerror!void) !void {

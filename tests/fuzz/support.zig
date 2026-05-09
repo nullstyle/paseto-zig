@@ -153,7 +153,6 @@ pub const token_parse_errors = [_]paseto.Error{
     error.UnsupportedPurpose,
     error.InvalidBase64,
     error.InvalidPadding,
-    error.OutOfMemory,
 };
 
 /// Shared allowlist for `v3.Local.decrypt` / `v4.Local.decrypt` and the

@@ -21,7 +21,6 @@ const parse_errors = [_]paseto.Error{
     error.InvalidKey,
     error.InvalidBase64,
     error.InvalidPadding,
-    error.OutOfMemory,
 };
 
 test "fuzz: paserk.keys.parse round-trips" {
@@ -47,5 +46,12 @@ fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         decoded.bytes,
     );
     defer allocator.free(reserialized);
+
+    var reparsed = try paseto.paserk.keys.parse(allocator, reserialized);
+    defer reparsed.deinit();
+
     try std.testing.expectEqualSlices(u8, input, reserialized);
+    try std.testing.expectEqual(decoded.version, reparsed.version);
+    try std.testing.expectEqual(decoded.kind, reparsed.kind);
+    try std.testing.expectEqualSlices(u8, decoded.bytes, reparsed.bytes);
 }

@@ -30,12 +30,10 @@ const seeds_pae = [_][]const u8{
 const base64_errors = [_]paseto.Error{
     error.InvalidBase64,
     error.InvalidPadding,
-    error.OutOfMemory,
 };
 
 const hex_errors = [_]paseto.Error{
     error.InvalidEncoding,
-    error.OutOfMemory,
 };
 
 test "fuzz: util.decodeBase64Alloc" {
@@ -68,6 +66,9 @@ fn base64Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     // byte-for-byte (base64url has no case or character ambiguity).
     const reencoded = try paseto.util.encodeBase64Alloc(allocator, decoded);
     defer allocator.free(reencoded);
+    try std.testing.expect(std.mem.indexOfScalar(u8, input, '=') == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, input, '+') == null);
+    try std.testing.expect(std.mem.indexOfScalar(u8, input, '/') == null);
     try std.testing.expectEqualSlices(u8, input, reencoded);
 }
 
@@ -82,7 +83,16 @@ fn hexFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         return support.expectAllowed(err, &hex_errors);
     };
     defer allocator.free(decoded);
+
+    try std.testing.expect(input.len % 2 == 0);
+    for (input) |c| try std.testing.expect(std.ascii.isHex(c));
     try std.testing.expectEqual(input.len / 2, decoded.len);
+
+    for (decoded, 0..) |byte, i| {
+        const encoded = std.fmt.bytesToHex([_]u8{byte}, .lower);
+        try std.testing.expectEqual(std.ascii.toLower(input[i * 2]), encoded[0]);
+        try std.testing.expectEqual(std.ascii.toLower(input[i * 2 + 1]), encoded[1]);
+    }
 }
 
 fn paeFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -104,8 +114,22 @@ fn paeFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     const out = try paseto.util.preAuthEncodeAlloc(allocator, part_slices[0..part_count]);
     defer allocator.free(out);
+    const out2 = try paseto.util.preAuthEncodeAlloc(allocator, part_slices[0..part_count]);
+    defer allocator.free(out2);
 
     var expected: usize = 8;
     for (part_slices[0..part_count]) |p| expected += 8 + p.len;
     try std.testing.expectEqual(expected, out.len);
+    try std.testing.expectEqualSlices(u8, out, out2);
+
+    var idx: usize = 0;
+    try std.testing.expectEqual(@as(u64, part_count), std.mem.readInt(u64, out[idx..][0..8], .little));
+    idx += 8;
+    for (part_slices[0..part_count]) |part| {
+        try std.testing.expectEqual(@as(u64, @intCast(part.len)), std.mem.readInt(u64, out[idx..][0..8], .little));
+        idx += 8;
+        try std.testing.expectEqualSlices(u8, part, out[idx..][0..part.len]);
+        idx += part.len;
+    }
+    try std.testing.expectEqual(out.len, idx);
 }

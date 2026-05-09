@@ -14,7 +14,6 @@ const seeds = [_][]const u8{
 
 const id_errors = [_]paseto.Error{
     error.InvalidKey,
-    error.OutOfMemory,
 };
 
 test "fuzz: paserk.id.compute accepts or rejects cleanly" {
@@ -53,6 +52,12 @@ fn computeFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         },
     };
     try std.testing.expect(std.mem.startsWith(u8, out, expected_prefix));
+    try std.testing.expectEqual(expected_prefix.len + paseto.util.encodedBase64Len(33), out.len);
+
+    const suffix = out[expected_prefix.len..];
+    const decoded = try paseto.util.decodeBase64Alloc(allocator, suffix);
+    defer allocator.free(decoded);
+    try std.testing.expectEqual(@as(usize, 33), decoded.len);
 }
 
 fn validFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -92,4 +97,18 @@ fn validFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     };
     defer allocator.free(via_wrapper);
     try std.testing.expectEqualSlices(u8, a, via_wrapper);
+
+    const expected_prefix = switch (version) {
+        .v3 => switch (kind) {
+            .lid => "k3.lid.",
+            .sid => "k3.sid.",
+            .pid => "k3.pid.",
+        },
+        .v4 => switch (kind) {
+            .lid => "k4.lid.",
+            .sid => "k4.sid.",
+            .pid => "k4.pid.",
+        },
+    };
+    try std.testing.expect(std.mem.startsWith(u8, a, expected_prefix));
 }

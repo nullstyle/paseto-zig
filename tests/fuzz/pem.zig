@@ -20,7 +20,6 @@ const seeds = [_][]const u8{
 const pem_to_der_errors = [_]paseto.Error{
     error.InvalidEncoding,
     error.InvalidBase64,
-    error.OutOfMemory,
 };
 
 const parse_errors = [_]paseto.Error{
@@ -28,7 +27,6 @@ const parse_errors = [_]paseto.Error{
     error.InvalidBase64,
     error.InvalidKey,
     error.UnsupportedVersion,
-    error.OutOfMemory,
 };
 
 test "fuzz: pem.pemToDer" {
@@ -50,8 +48,9 @@ fn pemToDerFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         return support.expectAllowed(err, &pem_to_der_errors);
     };
     defer allocator.free(out.der);
-    // Invariant: the caller receives a non-empty DER buffer on success.
+
     try std.testing.expect(out.der.len > 0);
+    try std.testing.expect(hasKnownPemTag(input));
 }
 
 fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -66,7 +65,9 @@ fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     };
     defer parsed.deinit();
 
-    // Contract: the reported format matches the byte length exactly.
+    const der = try paseto.pem.pemToDer(allocator, input);
+    defer allocator.free(der.der);
+
     const expected: usize = switch (parsed.format) {
         .ed25519_seed => 32,
         .ed25519_public => 32,
@@ -74,4 +75,20 @@ fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         .p384_public_compressed => 49,
     };
     try std.testing.expectEqual(expected, parsed.bytes.len);
+
+    if (std.mem.indexOf(u8, input, "-----BEGIN EC PRIVATE KEY-----") != null) {
+        try std.testing.expectEqual(paseto.pem.KeyFormat.p384_scalar, parsed.format);
+    } else if (std.mem.indexOf(u8, input, "-----BEGIN PRIVATE KEY-----") != null) {
+        try std.testing.expect(parsed.format == .ed25519_seed or parsed.format == .p384_scalar);
+    } else if (std.mem.indexOf(u8, input, "-----BEGIN PUBLIC KEY-----") != null) {
+        try std.testing.expect(parsed.format == .ed25519_public or parsed.format == .p384_public_compressed);
+    } else {
+        return error.UnexpectedPemParseSuccess;
+    }
+}
+
+fn hasKnownPemTag(input: []const u8) bool {
+    return std.mem.indexOf(u8, input, "-----BEGIN PRIVATE KEY-----") != null or
+        std.mem.indexOf(u8, input, "-----BEGIN PUBLIC KEY-----") != null or
+        std.mem.indexOf(u8, input, "-----BEGIN EC PRIVATE KEY-----") != null;
 }
