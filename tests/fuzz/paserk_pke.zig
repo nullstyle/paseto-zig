@@ -107,15 +107,18 @@ fn roundTripV4Fuzz(_: void, s: *std.testing.Smith) anyerror!void {
     // deterministic given the same Smith input.
     var seed: [32]u8 = undefined;
     s.bytes(&seed);
-    const pk = paseto.v4.Public.fromSeed(&seed) catch return;
+    const pk = try paseto.v4.Public.fromSeed(&seed);
     const recipient_pub = pk.publicKeyBytes();
 
     var ptk: [32]u8 = undefined;
     s.bytes(&ptk);
     var ephemeral: [32]u8 = undefined;
     s.bytes(&ephemeral);
+    ephemeral[0] &= 248;
+    ephemeral[31] &= 127;
+    ephemeral[31] |= 64;
 
-    const sealed = paseto.paserk.pke.sealV4(allocator, recipient_pub, &ptk, ephemeral) catch return;
+    const sealed = try paseto.paserk.pke.sealV4(allocator, recipient_pub, &ptk, ephemeral);
     defer allocator.free(sealed);
 
     const recovered = try paseto.paserk.pke.unsealV4(allocator, seed, sealed);
