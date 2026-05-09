@@ -337,7 +337,7 @@ test "PKE v4 round trip" {
     const ed_kp = try Ed25519.KeyPair.generateDeterministic(seed);
     const pk = ed_kp.public_key.toBytes();
 
-    const ptk = [_]u8{0x42} ** 32;
+    const ptk: [32]u8 = @splat(0x42);
     const sealed = try sealV4(allocator, pk, &ptk, null);
     defer allocator.free(sealed);
 
@@ -357,7 +357,7 @@ test "PKE v3 round trip" {
     const pubkey_point = try P384.basePoint.mul(scalar, .big);
     const pubkey = pubkey_point.toCompressedSec1();
 
-    const ptk = [_]u8{0x99} ** 32;
+    const ptk: [32]u8 = @splat(0x99);
     const sealed = try sealV3(allocator, &pubkey, &ptk, null);
     defer allocator.free(sealed);
 

@@ -263,8 +263,8 @@ fn macBody(
 
 test "PIE v4.local round trip" {
     const allocator = std.testing.allocator;
-    const wrapping = [_]u8{0xaa} ** 32;
-    const ptk = [_]u8{0x55} ** 32;
+    const wrapping: [32]u8 = @splat(0xaa);
+    const ptk: [32]u8 = @splat(0x55);
     const wrapped = try wrap(allocator, .v4, .local, &wrapping, &ptk, .{});
     defer allocator.free(wrapped);
     var result = try unwrap(allocator, &wrapping, wrapped);

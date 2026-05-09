@@ -491,7 +491,7 @@ test "parse rejects Ed25519 AlgorithmIdentifier with trailing parameters" {
         0x06, 0x03, 0x2b, 0x65, 0x70, // OID 1.3.101.112
         0x05, 0x00, // NULL parameters (disallowed)
         0x03, 0x21, 0x00, // BIT STRING, len 33, 0 unused bits
-    } ++ ([_]u8{0x00} ** 32);
+    } ++ @as([32]u8, @splat(0x00));
 
     const encoder = std.base64.standard.Encoder;
     const enc_len = encoder.calcSize(der.len);

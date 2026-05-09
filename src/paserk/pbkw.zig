@@ -460,51 +460,51 @@ fn encodePaserk(allocator: std.mem.Allocator, header: []const u8, body: []const 
 
 test "wrapV4 rejects non-KiB-aligned memlimit_bytes" {
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x11} ** 32;
+    const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
         .params = .{ .memlimit_bytes = 1500, .opslimit = 2 },
-        .salt = [_]u8{0x22} ** 16,
-        .nonce = [_]u8{0x33} ** 24,
+        .salt = @as([16]u8, @splat(0x22)),
+        .nonce = @as([24]u8, @splat(0x33)),
     }));
 }
 
 test "wrapV4 rejects memlimit_bytes below 1 KiB" {
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x11} ** 32;
+    const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
         .params = .{ .memlimit_bytes = 512, .opslimit = 2 },
-        .salt = [_]u8{0x22} ** 16,
-        .nonce = [_]u8{0x33} ** 24,
+        .salt = @as([16]u8, @splat(0x22)),
+        .nonce = @as([24]u8, @splat(0x33)),
     }));
 }
 
 test "wrapV4 rejects zero opslimit" {
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x11} ** 32;
+    const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
         .params = .{ .memlimit_bytes = 64 * 1024 * 1024, .opslimit = 0 },
-        .salt = [_]u8{0x22} ** 16,
-        .nonce = [_]u8{0x33} ** 24,
+        .salt = @as([16]u8, @splat(0x22)),
+        .nonce = @as([24]u8, @splat(0x33)),
     }));
 }
 
 test "wrapV4 rejects parallelism != 1" {
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x11} ** 32;
+    const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
         .params = .{ .memlimit_bytes = 64 * 1024 * 1024, .opslimit = 2, .para = 2 },
-        .salt = [_]u8{0x22} ** 16,
-        .nonce = [_]u8{0x33} ** 24,
+        .salt = @as([16]u8, @splat(0x22)),
+        .nonce = @as([24]u8, @splat(0x33)),
     }));
 }
 
 test "wrapV3 rejects zero iterations" {
     const allocator = std.testing.allocator;
-    const key = [_]u8{0x11} ** 32;
+    const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(Error.WeakParameters, wrapV3(allocator, .local, "pw", &key, .{
         .params = .{ .iterations = 0 },
-        .salt = [_]u8{0x22} ** 32,
-        .nonce = [_]u8{0x33} ** 16,
+        .salt = @as([32]u8, @splat(0x22)),
+        .nonce = @as([16]u8, @splat(0x33)),
     }));
 }
 

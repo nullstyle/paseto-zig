@@ -153,7 +153,8 @@ test "PAE matches spec examples" {
     {
         const out = try preAuthEncodeAlloc(allocator, &.{});
         defer allocator.free(out);
-        try std.testing.expectEqualSlices(u8, &[_]u8{0} ** 8, out);
+        const expected: [8]u8 = @splat(0);
+        try std.testing.expectEqualSlices(u8, &expected, out);
     }
 
     // pae([""]) ==
