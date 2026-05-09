@@ -1,0 +1,3 @@
+-W .github/workflows/ci.yml
+-P ubuntu-24.04-arm=catthehacker/ubuntu:act-latest
+--container-architecture linux/arm64

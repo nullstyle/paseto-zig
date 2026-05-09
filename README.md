@@ -164,10 +164,13 @@ strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 
 ## Compatibility
 
-* **Zig:** `0.17.0` minimum in `build.zig.zon`, with the current builtin-fuzz
-  workflow validated on `0.17.0-dev.256+04481c76c`. `build.zig.zon` cannot
-  cleanly pin that exact development snapshot, so the manifest advertises the
-  closest honest floor while this README records the exact tested toolchain.
+* **Zig:** `0.16.0` minimum in `build.zig.zon` and the default `mise.toml`
+  toolchain. The standard tests and seed-only fuzz corpus are CI-gated on
+  that stable release. Builtin mutation fuzzing with `--fuzz` still requires a
+  revalidated development toolchain; it was last validated locally on
+  `0.17.0-dev.256+04481c76c`. Do not float CI on `zig@master` without
+  rerunning the full matrix, because nightly standard-library changes can
+  break crypto tests independently of repo changes.
 * **Randomness:** library functions that need entropy (key / nonce / salt
   generation) draw from `std.Io.Threaded.global_single_threaded`, which is
   backed by the host operating system's CSPRNG. Callers who need their own
@@ -189,6 +192,24 @@ zig build e2e      # end-to-end smoke tests using the public API
 The PBKW argon2id vectors dominate wall-clock runtime; when iterating on
 unrelated changes use `zig build unit` or `zig build e2e` for fast feedback
 and only run `zig build test` before committing.
+
+GitHub Actions runs the same core checks on an Ubuntu arm64 runner for pushes
+to `main`, pull requests, and manual dispatches. To run that gate locally
+without Docker, use the mise task:
+
+```sh
+mise run ci
+```
+
+To exercise the actual workflow locally, make sure Docker is running and use
+the `act` task. The repo's `.actrc` pins the workflow file and maps
+`ubuntu-24.04-arm` to an `act` runner image with the same `linux/arm64`
+architecture as GitHub's hosted Ubuntu runner:
+
+```sh
+mise run act-ci-dry-run
+mise run act-ci
+```
 
 ## Fuzzing
 
@@ -239,6 +260,11 @@ harness test artifact executes once against its embedded corpus seeds and any
 wired regression inputs. Add `--fuzz[=limit]` to enable Zig's builtin mutation
 engine on top of that seeded startup. `--webui` is available with builtin fuzz
 mode and is especially useful for long-running scenario triage.
+
+The default mise/CI toolchain is Zig `0.16.0`, which covers the seed-only
+fuzz corpus. For mutation-mode fuzzing, use a known-good development Zig
+snapshot and re-run a bounded smoke command such as
+`zig build fuzz-scenario --fuzz=1000` before starting a long soak.
 
 Typical workflows:
 
@@ -327,8 +353,8 @@ seeds and the invariants each harness encodes.
 
 ## Contributing
 
-1. Install Zig `0.17.0-dev.256+04481c76c` (or another `0.17.0` toolchain once
-   you've revalidated the full test + builtin-fuzz workflow locally).
+1. Install the repo tools with `mise install`, or install Zig `0.16.0`
+   manually if you are not using mise.
 2. Clone with submodules if you want the Ruby reference (optional):
    ```sh
    git clone --recurse-submodules …

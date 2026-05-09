@@ -1,0 +1,21 @@
+[tools]
+act = "latest"
+zig = "0.16.0"
+
+[tasks.ci]
+description = "Run the same checks as GitHub CI without Docker"
+run = [
+  "zig fmt --check build.zig src tests",
+  "zig build unit",
+  "zig build e2e",
+  "zig build vectors",
+  "zig build fuzz-all",
+]
+
+[tasks.act-ci]
+description = "Run the GitHub Actions CI workflow locally with act"
+run = "act -j test"
+
+[tasks.act-ci-dry-run]
+description = "Preview the GitHub Actions CI workflow locally with act"
+run = "act -n -j test"

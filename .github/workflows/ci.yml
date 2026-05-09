@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MISE_ZIG_USE_COMMUNITY_MIRRORS: "false"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Zig test suite (Linux arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+          install_args: zig
+
+      - name: Show Zig version
+        run: zig version
+
+      - name: Check formatting
+        run: zig fmt --check build.zig src tests
+
+      - name: Run unit tests
+        run: zig build unit
+
+      - name: Run end-to-end tests
+        run: zig build e2e
+
+      - name: Run vector tests
+        run: zig build vectors
+
+      - name: Run deterministic fuzz corpus
+        run: zig build fuzz-all
