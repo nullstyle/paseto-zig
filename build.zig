@@ -67,10 +67,10 @@ pub fn build(b: *std.Build) void {
     // once against its embedded corpus seeds. Add `--fuzz[=limit]` to enable
     // Zig's builtin mutation engine, and `--webui` when interactive triage
     // helps.
-    const fuzz_all_step = b.step("fuzz-all", "Run all fuzz harnesses (seed-only by default; add --fuzz for mutation and --webui for interactive triage)");
-    const fuzz_parsers_step = b.step("fuzz-parsers", "Run parser fuzz harnesses (seed-only by default; add --fuzz for mutation and --webui for interactive triage)");
-    const fuzz_envelopes_step = b.step("fuzz-envelopes", "Run envelope fuzz harnesses (seed-only by default; add --fuzz for mutation and --webui for interactive triage)");
-    const fuzz_scenarios_step = b.step("fuzz-scenarios", "Run scenario fuzz harnesses (seed-only by default; add --fuzz for mutation and --webui for interactive triage)");
+    const fuzz_all_step = b.step("fuzz-all", "Run all fuzz harnesses (plain run = seed-only; add --fuzz, optional --webui)");
+    const fuzz_parsers_step = b.step("fuzz-parsers", "Run parser fuzz harnesses (plain run = seed-only; add --fuzz, optional --webui)");
+    const fuzz_envelopes_step = b.step("fuzz-envelopes", "Run envelope fuzz harnesses (plain run = seed-only; add --fuzz, optional --webui)");
+    const fuzz_scenarios_step = b.step("fuzz-scenarios", "Run scenario fuzz harnesses (plain run = seed-only; add --fuzz, optional --webui)");
 
     const fuzz_ctx: FuzzCtx = .{
         .b = b,

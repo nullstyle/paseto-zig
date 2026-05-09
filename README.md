@@ -2,7 +2,8 @@
 
 A full-featured implementation of [PASETO](https://github.com/paseto-standard/paseto-spec)
 (Platform-Agnostic Security Tokens) and [PASERK](https://github.com/paseto-standard/paserk)
-(Platform-Agnostic Serialized Keys) for Zig `0.17.0-dev.256+04481c76c`.
+(Platform-Agnostic Serialized Keys) for Zig `0.17.0`, validated on
+`0.17.0-dev.256+04481c76c`.
 
 Supports PASETO `v3` (NIST Modern — AES-256-CTR, HMAC-SHA384, ECDSA P-384)
 and `v4` (Sodium Modern — XChaCha20, BLAKE2b-keyed, Ed25519), covering both
@@ -163,9 +164,10 @@ strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
 
 ## Compatibility
 
-* **Zig:** `0.17.0-dev.256+04481c76c` (the version currently validated for the
-  full test and builtin-fuzz workflow in this repository). Earlier versions
-  are not supported.
+* **Zig:** `0.17.0` minimum in `build.zig.zon`, with the current builtin-fuzz
+  workflow validated on `0.17.0-dev.256+04481c76c`. `build.zig.zon` cannot
+  cleanly pin that exact development snapshot, so the manifest advertises the
+  closest honest floor while this README records the exact tested toolchain.
 * **Randomness:** library functions that need entropy (key / nonce / salt
   generation) draw from `std.Io.Threaded.global_single_threaded`, which is
   backed by the host operating system's CSPRNG. Callers who need their own
@@ -265,7 +267,8 @@ Typical workflows:
 
 ## Contributing
 
-1. Install Zig `0.17.0-dev.256+04481c76c`.
+1. Install Zig `0.17.0-dev.256+04481c76c` (or another `0.17.0` toolchain once
+   you've revalidated the full test + builtin-fuzz workflow locally).
 2. Clone with submodules if you want the Ruby reference (optional):
    ```sh
    git clone --recurse-submodules …
