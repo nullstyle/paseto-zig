@@ -248,6 +248,66 @@ Typical workflows:
 * Exercise the envelope/API surface: `zig build fuzz-envelopes --fuzz`
 * Run the scenario grammar interactively: `zig build fuzz-scenario --fuzz=10000 --webui`
 
+### Long-run operator notes
+
+Use one harness when you already know the bug family or want reproducible
+iteration on a narrow input domain. Use a group step when you want broader
+coverage across related harnesses without introducing new orchestration:
+`fuzz-parsers` for decode/parse surfaces, `fuzz-envelopes` for PASERK and
+high-level token APIs, and `fuzz-scenarios` when you want the deterministic
+scenario smoke sweep across the bounded grammar families.
+
+Mutation mode is opt-in. Add `--fuzz` for an open-ended builtin-fuzz session,
+or `--fuzz=<limit>` when you want a bounded run that still starts from the
+embedded seeds and regressions:
+
+```sh
+zig build fuzz-parsers --fuzz
+zig build fuzz-envelopes --fuzz
+zig build fuzz-scenario --fuzz=1000
+```
+
+Add `--webui` when you need interactive triage for a live mutation run. The
+scenario harness is the best fit because it concentrates cross-module misuse
+cases in one place without making every parser harness pay for UI overhead:
+
+```sh
+zig build fuzz-scenario --fuzz=10000 --webui
+```
+
+PBKW-heavy work should stay intentional instead of dominating every session.
+The official vectors and the `fuzz-paserk_pbkw` harness both exercise Argon2
+paths, so keep everyday iteration biased toward `zig build unit`,
+`zig build e2e`, parser harnesses, or the non-PBKW envelope harnesses unless
+you are actively touching PBKW code or password-wrapping invariants.
+
+When a long run finds a crash, first reduce it to a stable repro with the
+single harness target. Promote inputs that broaden future mutation coverage
+into `tests/fuzz/corpus/<harness>/`, and promote fixed bug repros that must
+never regress into `tests/fuzz/regressions/<harness>/`. After adding the new
+input, wire it into the harness seed list with `@embedFile`, rerun the focused
+harness, then rerun the relevant group step to confirm the seed-only sweep
+still passes.
+
+### Full-tilt Mac Studio recipe
+
+For an operator-driven local soak on a machine that can spare the cores, run
+the broad mutation passes separately so parser, envelope, and scenario work can
+each accumulate coverage without extra orchestration code. In particular, do
+not overlap scenario-mutating runs against the same corpus:
+
+```sh
+zig build fuzz-parsers --fuzz
+zig build fuzz-envelopes --fuzz
+zig build fuzz-scenario --fuzz --webui
+```
+
+Keep this local and on-demand. There is no CI, cron, or built-in coordinator
+for these runs, and 48-hour soaks are manual, iterative sessions. This README
+update was verified with bounded `--fuzz=<limit>` commands, not with an actual
+48-hour soak. Long-run coverage is still bounded by the quality of the corpus
+seeds and the invariants each harness encodes.
+
 ### Corpus and regression policy
 
 * Seed corpora live at `tests/fuzz/corpus/<harness>/*.bin`. Keep hand-curated
