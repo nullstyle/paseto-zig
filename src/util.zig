@@ -42,6 +42,27 @@ pub fn decodeBase64Alloc(allocator: std.mem.Allocator, encoded: []const u8) ![]u
     return out;
 }
 
+/// Decode unpadded base64url into `out`; `out.len` must match the decoded
+/// length exactly.
+pub fn decodeBase64(out: []u8, encoded: []const u8) !void {
+    // PASETO test vectors require unpadded base64url input; reject any
+    // trailing '=' characters the caller may have attached.
+    if (std.mem.indexOfScalar(u8, encoded, '=')) |_| return Error.InvalidPadding;
+
+    const size = b64.Decoder.calcSizeForSlice(encoded) catch |err| switch (err) {
+        error.InvalidPadding => return Error.InvalidPadding,
+        error.InvalidCharacter => return Error.InvalidBase64,
+        error.NoSpaceLeft => return Error.InvalidBase64,
+    };
+    if (size != out.len) return Error.InvalidEncoding;
+
+    b64.Decoder.decode(out, encoded) catch |err| switch (err) {
+        error.InvalidCharacter => return Error.InvalidBase64,
+        error.InvalidPadding => return Error.InvalidPadding,
+        error.NoSpaceLeft => unreachable,
+    };
+}
+
 pub fn writeBE(comptime T: type, buf: []u8, value: T) void {
     std.mem.writeInt(T, buf[0..@sizeOf(T)], value, .big);
 }

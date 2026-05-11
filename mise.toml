@@ -5,6 +5,7 @@ zig = "0.16.0"
 [tasks.ci]
 description = "Run the same checks as GitHub CI without Docker"
 run = [
+  "zig fetch .",
   "zig fmt --check build.zig src tests",
   "zig build unit",
   "zig build e2e",

@@ -19,9 +19,14 @@ test "v4.local encrypt/decrypt + lid + PIE round trip" {
     defer allocator.free(plaintext);
     try std.testing.expectEqualStrings("{\"data\":\"top secret\"}", plaintext);
 
-    const lid = try key.lid(allocator);
+    const lid_id = try key.lid();
+    try std.testing.expect(lid_id.version == .v4);
+    try std.testing.expect(lid_id.kind == .lid);
+
+    const lid = try lid_id.toString(allocator);
     defer allocator.free(lid);
     try std.testing.expect(std.mem.startsWith(u8, lid, "k4.lid."));
+    try std.testing.expect(lid_id.eql(try paseto.paserk.Id.parse(lid)));
 
     const other = paseto.v4.Local.generate();
     const wrapped = try key.wrapLocal(allocator, other, .{});

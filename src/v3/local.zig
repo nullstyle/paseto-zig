@@ -139,8 +139,8 @@ pub const Local = struct {
         return try keys_mod.serialize(allocator, .v3, .local, &self.key);
     }
 
-    pub fn lid(self: Local, allocator: std.mem.Allocator) ![]u8 {
-        return try id_mod.lid(allocator, .v3, &self.key);
+    pub fn lid(self: Local) !id_mod.Id {
+        return try id_mod.lid(.v3, &self.key);
     }
 
     pub fn wrapLocal(

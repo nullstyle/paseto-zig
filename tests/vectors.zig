@@ -428,18 +428,21 @@ test "PASERK id vectors" {
             const key_bytes = try hexAlloc(allocator, key_hex);
             defer allocator.free(key_bytes);
 
-            const result = paseto.paserk.id.compute(allocator, c.version, c.kind, key_bytes);
+            const result = paseto.paserk.id.compute(c.version, c.kind, key_bytes);
             if (result) |produced| {
-                defer allocator.free(produced);
+                const produced_text = try produced.toString(allocator);
+                defer allocator.free(produced_text);
                 if (expect_fail) {
-                    std.debug.print("vector {s}: unexpectedly produced {s}\n", .{ name, produced });
+                    std.debug.print("vector {s}: unexpectedly produced {s}\n", .{ name, produced_text });
                     try std.testing.expect(false);
                 }
                 if (expected_paserk) |exp| {
-                    if (!std.mem.eql(u8, produced, exp)) {
-                        std.debug.print("{s}: produced {s}, expected {s}\n", .{ name, produced, exp });
+                    if (!std.mem.eql(u8, produced_text, exp)) {
+                        std.debug.print("{s}: produced {s}, expected {s}\n", .{ name, produced_text, exp });
                         try std.testing.expect(false);
                     }
+                    const parsed_id = try paseto.paserk.Id.parse(exp);
+                    try std.testing.expect(produced.eql(parsed_id));
                 }
             } else |err| {
                 if (!expect_fail) {

@@ -2,8 +2,7 @@
 
 A full-featured implementation of [PASETO](https://github.com/paseto-standard/paseto-spec)
 (Platform-Agnostic Security Tokens) and [PASERK](https://github.com/paseto-standard/paserk)
-(Platform-Agnostic Serialized Keys) for Zig `0.17.0`, validated on
-`0.17.0-dev.256+04481c76c`.
+(Platform-Agnostic Serialized Keys) for Zig `0.16.0+`.
 
 Supports PASETO `v3` (NIST Modern — AES-256-CTR, HMAC-SHA384, ECDSA P-384)
 and `v4` (Sodium Modern — XChaCha20, BLAKE2b-keyed, Ed25519), covering both
@@ -25,18 +24,23 @@ for every supported protocol and PASERK type.
 
 ## Installing
 
-> **Note:** The library is not yet published to a public registry. For now
-> add it as a local or git dependency. Once `paseto-zig` is published the
-> URL+hash values below will become real.
+Add `paseto-zig` to a consuming project's `build.zig.zon` with `zig fetch`.
+Pin releases by tag, or pin unreleased builds by full commit SHA:
+
+```sh
+zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/refs/tags/v0.1.0.tar.gz
+zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/<commit-sha>.tar.gz
+```
+
+That writes a dependency entry like this:
 
 `build.zig.zon`:
 
 ```zig
 .dependencies = .{
     .paseto = .{
-        // TODO: populate once paseto-zig has a published release.
-        .url = "https://example.invalid/paseto-zig-0.1.0.tar.gz",
-        .hash = "0000000000000000000000000000000000000000000000000000000000000000",
+        .url = "https://github.com/nullstyle/paseto-zig/archive/refs/tags/v0.1.0.tar.gz",
+        .hash = "...",
     },
 },
 ```
@@ -49,7 +53,15 @@ exe.root_module.addImport("paseto", paseto.module("paseto"));
 ```
 
 To pin directly to a local checkout while developing, replace the `url`/`hash`
-pair with `.path = "/abs/path/to/paseto-zig"`.
+pair with a path relative to the consuming project's build root:
+
+```zig
+.dependencies = .{
+    .paseto = .{
+        .path = "../paseto-zig",
+    },
+},
+```
 
 ## Quick tour
 
@@ -118,10 +130,16 @@ Every PASERK operation is exposed both on the high-level key types and via
 byte-level helpers in `paseto.paserk`.
 
 ```zig
-// Identifiers.
-const lid = try key.lid(allocator);      // "k4.lid.…"
-const pid = try signer.pid(allocator);   // "k4.pid.…"
-const sid = try signer.sid(allocator);   // "k4.sid.…"
+// Identifiers as parsed handles.
+const lid_id = try key.lid();       // paseto.paserk.Id { .version = .v4, .kind = .lid, ... }
+const pid_id = try signer.pid();    // .kind = .pid
+const sid_id = try signer.sid();    // .kind = .sid
+
+// Canonical PASERK ID strings are still available when needed.
+const lid = try lid_id.toString(allocator);  // "k4.lid.…"
+defer allocator.free(lid);
+const parsed_lid = try paseto.paserk.Id.parse(lid);
+std.debug.assert(lid_id.eql(parsed_lid));
 
 // PIE wrap (symmetric key wrap).
 const wrapped = try key.wrapLocal(allocator, other_key, .{});  // "k4.local-wrap.pie.…"

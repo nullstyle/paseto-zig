@@ -19,6 +19,7 @@ pub const Error = errors.Error;
 pub const Token = token.Token;
 pub const Version = token.Version;
 pub const Purpose = token.Purpose;
+pub const PaserkId = paserk.Id;
 pub const Claims = claims.Claims;
 pub const Validator = claims.Validator;
 pub const Result = claims.Result;

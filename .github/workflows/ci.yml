@@ -36,6 +36,9 @@ jobs:
       - name: Show Zig version
         run: zig version
 
+      - name: Verify package metadata
+        run: zig fetch .
+
       - name: Check formatting
         run: zig fmt --check build.zig src tests
 

@@ -150,8 +150,8 @@ pub const Local = struct {
     }
 
     /// Compute the `k4.lid.` PASERK ID for this key.
-    pub fn lid(self: Local, allocator: std.mem.Allocator) ![]u8 {
-        return try id_mod.lid(allocator, .v4, &self.key);
+    pub fn lid(self: Local) !id_mod.Id {
+        return try id_mod.lid(.v4, &self.key);
     }
 
     /// Wrap another v4.local key using this key as the symmetric wrapping

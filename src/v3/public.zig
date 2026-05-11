@@ -177,14 +177,14 @@ pub const Public = struct {
         return try keys_mod.serialize(allocator, .v3, .secret, &scalar);
     }
 
-    pub fn pid(self: Public, allocator: std.mem.Allocator) ![]u8 {
+    pub fn pid(self: Public) !id_mod.Id {
         const compressed = self.publicCompressed();
-        return try id_mod.pid(allocator, .v3, &compressed);
+        return try id_mod.pid(.v3, &compressed);
     }
 
-    pub fn sid(self: Public, allocator: std.mem.Allocator) ![]u8 {
+    pub fn sid(self: Public) !id_mod.Id {
         const scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
-        return try id_mod.sid(allocator, .v3, &scalar);
+        return try id_mod.sid(.v3, &scalar);
     }
 
     /// Seal a v3 local key to this public key.

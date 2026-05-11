@@ -162,13 +162,13 @@ pub const Public = struct {
         return try keys_mod.serialize(allocator, .v4, .secret, &secret);
     }
 
-    pub fn pid(self: Public, allocator: std.mem.Allocator) ![]u8 {
-        return try id_mod.pid(allocator, .v4, &self.public_key);
+    pub fn pid(self: Public) !id_mod.Id {
+        return try id_mod.pid(.v4, &self.public_key);
     }
 
-    pub fn sid(self: Public, allocator: std.mem.Allocator) ![]u8 {
+    pub fn sid(self: Public) !id_mod.Id {
         const secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
-        return try id_mod.sid(allocator, .v4, &secret);
+        return try id_mod.sid(.v4, &secret);
     }
 
     /// Seal a v4 local key to this public key, returning a `k4.seal.` PASERK.

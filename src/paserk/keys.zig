@@ -139,7 +139,8 @@ pub fn parse(allocator: std.mem.Allocator, paserk: []const u8) !Decoded {
     };
 }
 
-fn validateKeyLength(version: Version, kind: KeyType, len: usize) !void {
+/// Validate raw PASERK key material length for the given version and key type.
+pub fn validateKeyLength(version: Version, kind: KeyType, len: usize) !void {
     switch (version) {
         .v3 => switch (kind) {
             .local => if (len != 32) return Error.InvalidKey,

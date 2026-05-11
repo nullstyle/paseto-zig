@@ -15,6 +15,7 @@ pub const pbkw = @import("pbkw.zig");
 pub const Version = keys.Version;
 pub const KeyType = keys.KeyType;
 pub const Decoded = keys.Decoded;
+pub const Id = id.Id;
 pub const IdKind = id.IdKind;
 
 test {

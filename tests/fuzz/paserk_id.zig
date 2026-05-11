@@ -32,11 +32,9 @@ fn computeFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const version = s.value(paseto.Version);
     const kind = s.value(paseto.paserk.IdKind);
 
-    const allocator = std.testing.allocator;
-    const out = paseto.paserk.id.compute(allocator, version, kind, input) catch |err| {
+    const id_handle = paseto.paserk.id.compute(version, kind, input) catch |err| {
         return support.expectAllowed(err, &id_errors);
     };
-    defer allocator.free(out);
 
     // Prefix contract: "k{3,4}.{lid|sid|pid}."
     const expected_prefix = switch (version) {
@@ -51,8 +49,16 @@ fn computeFuzz(_: void, s: *std.testing.Smith) anyerror!void {
             .pid => "k4.pid.",
         },
     };
+
+    const allocator = std.testing.allocator;
+    const out = try id_handle.toString(allocator);
+    defer allocator.free(out);
     try std.testing.expect(std.mem.startsWith(u8, out, expected_prefix));
     try std.testing.expectEqual(expected_prefix.len + paseto.util.encodedBase64Len(33), out.len);
+
+    try std.testing.expect(id_handle.version == version);
+    try std.testing.expect(id_handle.kind == kind);
+    try std.testing.expect(id_handle.eqlString(out));
 
     const suffix = out[expected_prefix.len..];
     const decoded = try paseto.util.decodeBase64Alloc(allocator, suffix);
@@ -83,20 +89,23 @@ fn validFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     s.bytes(key_buf[0..len]);
     const key = key_buf[0..len];
 
-    const a = try paseto.paserk.id.compute(allocator, version, kind, key);
+    const id_handle = try paseto.paserk.id.compute(version, kind, key);
+    try std.testing.expect(id_handle.version == version);
+    try std.testing.expect(id_handle.kind == kind);
+
+    const a = try id_handle.toString(allocator);
     defer allocator.free(a);
-    const b = try paseto.paserk.id.compute(allocator, version, kind, key);
-    defer allocator.free(b);
-    try std.testing.expectEqualSlices(u8, a, b);
+    const b = try paseto.paserk.id.compute(version, kind, key);
+    try std.testing.expect(id_handle.eql(b));
 
     // And the dedicated wrappers must agree with `compute`.
     const via_wrapper = switch (kind) {
-        .lid => try paseto.paserk.id.lid(allocator, version, key),
-        .sid => try paseto.paserk.id.sid(allocator, version, key),
-        .pid => try paseto.paserk.id.pid(allocator, version, key),
+        .lid => try paseto.paserk.id.lid(version, key),
+        .sid => try paseto.paserk.id.sid(version, key),
+        .pid => try paseto.paserk.id.pid(version, key),
     };
-    defer allocator.free(via_wrapper);
-    try std.testing.expectEqualSlices(u8, a, via_wrapper);
+    try std.testing.expect(id_handle.eql(via_wrapper));
+    try std.testing.expect(id_handle.eql(try paseto.paserk.Id.parse(a)));
 
     const expected_prefix = switch (version) {
         .v3 => switch (kind) {
