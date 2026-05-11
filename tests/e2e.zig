@@ -4,6 +4,46 @@
 const std = @import("std");
 const paseto = @import("paseto");
 
+test "PASERK Id works as a public hash map key" {
+    const allocator = std.testing.allocator;
+    const Map = std.HashMap(paseto.paserk.Id, u32, paseto.paserk.Id.HashContext, 80);
+
+    const key_bytes: [32]u8 = @splat(0);
+    const key = try paseto.v4.Local.fromBytes(&key_bytes);
+    const computed = try key.lid();
+    const encoded = try computed.toString(allocator);
+    defer allocator.free(encoded);
+    const parsed = try paseto.paserk.Id.parse(encoded);
+
+    var map = Map.init(allocator);
+    defer map.deinit();
+
+    try map.put(computed, 10);
+    try std.testing.expectEqual(@as(?u32, 10), map.get(parsed));
+
+    var other_key_bytes: [32]u8 = @splat(0);
+    other_key_bytes[0] = 1;
+    const other_key = try paseto.v4.Local.fromBytes(&other_key_bytes);
+    const different_digest = try other_key.lid();
+    const different_kind = try paseto.paserk.id.pid(.v4, &key_bytes);
+    const v3_key = try paseto.v3.Local.fromBytes(&key_bytes);
+    const different_version = try v3_key.lid();
+
+    try std.testing.expect(!computed.eql(different_digest));
+    try std.testing.expect(!computed.eql(different_kind));
+    try std.testing.expect(!computed.eql(different_version));
+
+    try map.put(different_digest, 20);
+    try map.put(different_kind, 30);
+    try map.put(different_version, 40);
+
+    try std.testing.expectEqual(@as(usize, 4), map.count());
+    try std.testing.expectEqual(@as(?u32, 10), map.get(parsed));
+    try std.testing.expectEqual(@as(?u32, 20), map.get(different_digest));
+    try std.testing.expectEqual(@as(?u32, 30), map.get(different_kind));
+    try std.testing.expectEqual(@as(?u32, 40), map.get(different_version));
+}
+
 test "v4.local encrypt/decrypt + lid + PIE round trip" {
     const allocator = std.testing.allocator;
 

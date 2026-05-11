@@ -1,5 +1,6 @@
 //! Fuzz harness for `src/paserk/id.zig`. Sub-targets:
 //!   - `compute` on arbitrary bytes (tolerated: InvalidKey)
+//!   - `parse` on arbitrary bytes (tolerated: parser/encoding errors)
 //!   - Valid-length inputs: result carries the correct prefix and repeated
 //!     calls are byte-for-byte deterministic
 
@@ -16,8 +17,21 @@ const id_errors = [_]paseto.Error{
     error.InvalidKey,
 };
 
+const parse_errors = [_]paseto.Error{
+    error.InvalidKeyId,
+    error.UnsupportedVersion,
+    error.UnsupportedOperation,
+    error.InvalidBase64,
+    error.InvalidPadding,
+    error.InvalidEncoding,
+};
+
 test "fuzz: paserk.id.compute accepts or rejects cleanly" {
     try std.testing.fuzz({}, computeFuzz, .{ .corpus = &seeds });
+}
+
+test "fuzz: paserk.Id.parse accepts or rejects cleanly" {
+    try std.testing.fuzz({}, parseFuzz, .{ .corpus = &seeds });
 }
 
 test "fuzz: paserk.id valid-length is deterministic and prefixed" {
@@ -64,6 +78,23 @@ fn computeFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     const decoded = try paseto.util.decodeBase64Alloc(allocator, suffix);
     defer allocator.free(decoded);
     try std.testing.expectEqual(@as(usize, 33), decoded.len);
+}
+
+fn parseFuzz(_: void, s: *std.testing.Smith) anyerror!void {
+    var buf: [support.max_input_bytes]u8 = undefined;
+    const n = s.slice(&buf);
+    const input = buf[0..n];
+
+    const id_handle = paseto.paserk.Id.parse(input) catch |err| {
+        return support.expectAllowed(err, &parse_errors);
+    };
+
+    const allocator = std.testing.allocator;
+    const encoded = try id_handle.toString(allocator);
+    defer allocator.free(encoded);
+
+    const reparsed = try paseto.paserk.Id.parse(encoded);
+    try std.testing.expect(id_handle.eql(reparsed));
 }
 
 fn validFuzz(_: void, s: *std.testing.Smith) anyerror!void {

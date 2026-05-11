@@ -60,6 +60,30 @@ pub const Id = struct {
     kind: IdKind,
     digest: [digest_bytes]u8,
 
+    pub const HashContext = struct {
+        pub fn hash(_: HashContext, id: Id) u64 {
+            const version_byte: [1]u8 = .{switch (id.version) {
+                .v3 => 3,
+                .v4 => 4,
+            }};
+            const kind_byte: [1]u8 = .{switch (id.kind) {
+                .lid => 0,
+                .sid => 1,
+                .pid => 2,
+            }};
+
+            var h = std.hash.Wyhash.init(0);
+            h.update(&version_byte);
+            h.update(&kind_byte);
+            h.update(&id.digest);
+            return h.final();
+        }
+
+        pub fn eql(_: HashContext, a: Id, b: Id) bool {
+            return a.eql(b);
+        }
+    };
+
     pub fn fromKey(
         version: Version,
         kind: IdKind,
@@ -264,10 +288,71 @@ test "Id computes, parses, serializes, and compares" {
     try std.testing.expectEqualSlices(u8, encoded, formatted);
 }
 
+test "Id HashContext supports typed hash map keys" {
+    const allocator = std.testing.allocator;
+    const Map = std.HashMap(Id, u32, Id.HashContext, 80);
+
+    const key: [32]u8 = @splat(0);
+    const computed = try lid(.v4, &key);
+    const computed_text = try computed.toString(allocator);
+    defer allocator.free(computed_text);
+    const parsed = try Id.parse(computed_text);
+
+    var map = Map.init(allocator);
+    defer map.deinit();
+
+    try map.put(computed, 10);
+    try std.testing.expectEqual(@as(?u32, 10), map.get(parsed));
+
+    var other_key: [32]u8 = @splat(0);
+    other_key[0] = 1;
+    const different_digest = try lid(.v4, &other_key);
+    const different_version = try lid(.v3, &key);
+    const different_kind = try pid(.v4, &key);
+
+    try std.testing.expect(!computed.eql(different_digest));
+    try std.testing.expect(!computed.eql(different_version));
+    try std.testing.expect(!computed.eql(different_kind));
+
+    try map.put(different_digest, 20);
+    try map.put(different_version, 30);
+    try map.put(different_kind, 40);
+
+    try std.testing.expectEqual(@as(usize, 4), map.count());
+    try std.testing.expectEqual(@as(?u32, 10), map.get(parsed));
+    try std.testing.expectEqual(@as(?u32, 20), map.get(different_digest));
+    try std.testing.expectEqual(@as(?u32, 30), map.get(different_version));
+    try std.testing.expectEqual(@as(?u32, 40), map.get(different_kind));
+}
+
 test "Id parse rejects malformed ids" {
     try std.testing.expectError(Error.InvalidKeyId, Id.parse("k4.lid"));
     try std.testing.expectError(Error.InvalidKeyId, Id.parse("k4.lid.too.short"));
     try std.testing.expectError(Error.UnsupportedVersion, Id.parse("k2.lid.bqltbNc4JLUAmc9Xtpok-fBuI0dQN5_m3CD9W_nbh559"));
     try std.testing.expectError(Error.UnsupportedOperation, Id.parse("k4.xid.bqltbNc4JLUAmc9Xtpok-fBuI0dQN5_m3CD9W_nbh559"));
     try std.testing.expectError(Error.InvalidBase64, Id.parse("k4.lid.********************************************"));
+}
+
+test "Id parse rejects raw PASERK keys" {
+    const allocator = std.testing.allocator;
+
+    const cases = [_]struct {
+        version: Version,
+        kind: keys.KeyType,
+        len: usize,
+    }{
+        .{ .version = .v4, .kind = .public, .len = 32 },
+        .{ .version = .v4, .kind = .secret, .len = 64 },
+        .{ .version = .v4, .kind = .local, .len = 32 },
+        .{ .version = .v3, .kind = .public, .len = 49 },
+        .{ .version = .v3, .kind = .secret, .len = 48 },
+        .{ .version = .v3, .kind = .local, .len = 32 },
+    };
+
+    var key_buf: [64]u8 = @splat(0);
+    for (cases) |case| {
+        const paserk_key = try keys.serialize(allocator, case.version, case.kind, key_buf[0..case.len]);
+        defer allocator.free(paserk_key);
+        try std.testing.expectError(Error.UnsupportedOperation, Id.parse(paserk_key));
+    }
 }
