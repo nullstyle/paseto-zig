@@ -23,6 +23,7 @@ const parse_errors = [_]paseto.Error{
     error.UnsupportedVersion,
     error.UnsupportedOperation,
     error.InvalidKey,
+    error.InvalidKeyPair,
     error.InvalidBase64,
     error.InvalidPadding,
 };

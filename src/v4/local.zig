@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("../util.zig");
 const errors = @import("../errors.zig");
 const token_mod = @import("../token.zig");
+const claims_mod = @import("../claims.zig");
 const keys_mod = @import("../paserk/keys.zig");
 const id_mod = @import("../paserk/id.zig");
 const pie_mod = @import("../paserk/pie.zig");
@@ -35,6 +36,14 @@ pub const Local = struct {
         return k;
     }
 
+    pub fn fromPaserk(allocator: std.mem.Allocator, paserk: []const u8) !Local {
+        var decoded = try keys_mod.parse(allocator, paserk);
+        defer decoded.deinit();
+        if (decoded.version != .v4) return Error.WrongVersion;
+        if (decoded.kind != .local) return Error.WrongPurpose;
+        return try fromBytes(decoded.bytes);
+    }
+
     pub fn eql(self: Local, other: Local) bool {
         return util.constantTimeEqual(&self.key, &other.key);
     }
@@ -62,34 +71,59 @@ pub const Local = struct {
             util.randomBytes(&nonce);
         }
 
-        const keys = deriveKeys(self.key, nonce);
+        return try self.encryptWithNonce(
+            allocator,
+            message,
+            &nonce,
+            opts.footer,
+            opts.implicit_assertion,
+        );
+    }
+
+    /// Encrypt with a caller-supplied 32-byte nonce. This is the freestanding
+    /// primitive used by the WASM ABI, where the host supplies CSPRNG bytes.
+    /// Reusing a nonce with the same key breaks confidentiality.
+    pub fn encryptWithNonce(
+        self: *const Local,
+        allocator: std.mem.Allocator,
+        message: []const u8,
+        nonce: *const [nonce_bytes]u8,
+        footer: []const u8,
+        implicit_assertion: []const u8,
+    ) ![]u8 {
+        var keys = deriveKeys(&self.key, nonce);
+        defer util.secureZero(std.mem.asBytes(&keys));
 
         const ciphertext = try allocator.alloc(u8, message.len);
-        defer allocator.free(ciphertext);
+        defer util.secureFree(allocator, ciphertext);
         std.crypto.stream.chacha.XChaCha20IETF.xor(ciphertext, message, 0, keys.ek, keys.n2);
 
         // PAE over header, nonce, ciphertext, footer, implicit assertion.
         var pae_parts: [5][]const u8 = .{
             pae_header,
-            &nonce,
+            nonce,
             ciphertext,
-            opts.footer,
-            opts.implicit_assertion,
+            footer,
+            implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         var tag: [mac_bytes]u8 = undefined;
-        Blake2b(mac_bytes * 8).hash(pae, &tag, .{ .key = &keys.ak });
+        var tag_hasher = Blake2b(mac_bytes * 8).init(.{});
+        defer util.secureZero(std.mem.asBytes(&tag_hasher));
+        setBlake2bKey(&tag_hasher, &keys.ak);
+        tag_hasher.update(pae);
+        tag_hasher.final(&tag);
 
         // Payload = nonce || ciphertext || tag
         const raw_payload = try allocator.alloc(u8, nonce_bytes + ciphertext.len + mac_bytes);
-        defer allocator.free(raw_payload);
-        @memcpy(raw_payload[0..nonce_bytes], &nonce);
+        defer util.secureFree(allocator, raw_payload);
+        @memcpy(raw_payload[0..nonce_bytes], nonce);
         @memcpy(raw_payload[nonce_bytes .. nonce_bytes + ciphertext.len], ciphertext);
         @memcpy(raw_payload[nonce_bytes + ciphertext.len ..], &tag);
 
-        return try token_mod.serialize(allocator, .v4, .local, raw_payload, opts.footer);
+        return try token_mod.serialize(allocator, .v4, .local, raw_payload, footer);
     }
 
     /// Decrypt a PASETO token string, returning the plaintext message.
@@ -100,9 +134,45 @@ pub const Local = struct {
         token_str: []const u8,
         implicit_assertion: []const u8,
     ) ![]u8 {
+        return try self.decryptBorrowed(allocator, token_str, implicit_assertion);
+    }
+
+    /// Pointer-receiver variant for freestanding callers that must avoid an
+    /// extra key copy in exported linear memory.
+    pub fn decryptBorrowed(
+        self: *const Local,
+        allocator: std.mem.Allocator,
+        token_str: []const u8,
+        implicit_assertion: []const u8,
+    ) ![]u8 {
         var tok = try token_mod.parse(allocator, token_str);
         defer tok.deinit();
-        return try self.decryptToken(allocator, tok, implicit_assertion);
+        return try self.decryptTokenBorrowed(allocator, &tok, implicit_assertion);
+    }
+
+    pub fn decryptWithFooter(
+        self: Local,
+        allocator: std.mem.Allocator,
+        token_str: []const u8,
+        implicit_assertion: []const u8,
+    ) !claims_mod.Result {
+        return try self.decryptWithFooterBorrowed(allocator, token_str, implicit_assertion);
+    }
+
+    /// Footer-preserving pointer-receiver variant for freestanding callers.
+    pub fn decryptWithFooterBorrowed(
+        self: *const Local,
+        allocator: std.mem.Allocator,
+        token_str: []const u8,
+        implicit_assertion: []const u8,
+    ) !claims_mod.Result {
+        var tok = try token_mod.parse(allocator, token_str);
+        defer tok.deinit();
+        const plaintext = try self.decryptTokenBorrowed(allocator, &tok, implicit_assertion);
+        errdefer util.secureFree(allocator, plaintext);
+        const footer = try allocator.dupe(u8, tok.footer);
+        errdefer util.secureFree(allocator, footer);
+        return .{ .claims_bytes = plaintext, .footer = footer, .allocator = allocator };
     }
 
     /// Decrypt using an already-parsed Token. The token is borrowed for the
@@ -110,7 +180,17 @@ pub const Local = struct {
     pub fn decryptToken(
         self: Local,
         allocator: std.mem.Allocator,
-        tok: token_mod.Token,
+        tok: *const token_mod.Token,
+        implicit_assertion: []const u8,
+    ) ![]u8 {
+        return try self.decryptTokenBorrowed(allocator, tok, implicit_assertion);
+    }
+
+    /// Parsed-token pointer-receiver variant used by the freestanding ABI.
+    pub fn decryptTokenBorrowed(
+        self: *const Local,
+        allocator: std.mem.Allocator,
+        tok: *const token_mod.Token,
         implicit_assertion: []const u8,
     ) ![]u8 {
         if (tok.version != .v4 or tok.purpose != .local) return Error.WrongPurpose;
@@ -121,7 +201,8 @@ pub const Local = struct {
         const ciphertext = payload[nonce_bytes .. payload.len - mac_bytes];
         const tag = payload[payload.len - mac_bytes ..];
 
-        const keys = deriveKeys(self.key, nonce.*);
+        var keys = deriveKeys(&self.key, nonce);
+        defer util.secureZero(std.mem.asBytes(&keys));
 
         var pae_parts: [5][]const u8 = .{
             pae_header,
@@ -131,15 +212,19 @@ pub const Local = struct {
             implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         var expected_tag: [mac_bytes]u8 = undefined;
-        Blake2b(mac_bytes * 8).hash(pae, &expected_tag, .{ .key = &keys.ak });
+        var tag_hasher = Blake2b(mac_bytes * 8).init(.{});
+        defer util.secureZero(std.mem.asBytes(&tag_hasher));
+        setBlake2bKey(&tag_hasher, &keys.ak);
+        tag_hasher.update(pae);
+        tag_hasher.final(&expected_tag);
 
         if (!util.constantTimeEqual(tag, &expected_tag)) return Error.InvalidAuthenticator;
 
         const plaintext = try allocator.alloc(u8, ciphertext.len);
-        errdefer allocator.free(plaintext);
+        errdefer util.secureFree(allocator, plaintext);
         std.crypto.stream.chacha.XChaCha20IETF.xor(plaintext, ciphertext, 0, keys.ek, keys.n2);
         return plaintext;
     }
@@ -202,26 +287,43 @@ const DerivedKeys = struct {
     ak: [32]u8,
 };
 
-fn deriveKeys(key: [key_bytes]u8, nonce: [nonce_bytes]u8) DerivedKeys {
+fn deriveKeys(key: *const [key_bytes]u8, nonce: *const [nonce_bytes]u8) DerivedKeys {
     var tmp: [56]u8 = undefined;
+    defer util.secureZero(&tmp);
     var out: DerivedKeys = undefined;
 
     // tmp = BLAKE2b-56(key=key, data="paseto-encryption-key"||nonce)
-    var h = Blake2b(56 * 8).init(.{ .key = &key });
+    var h = Blake2b(56 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
+    setBlake2bKey(&h, key);
     h.update("paseto-encryption-key");
-    h.update(&nonce);
+    h.update(nonce);
     h.final(&tmp);
 
     @memcpy(&out.ek, tmp[0..32]);
     @memcpy(&out.n2, tmp[32..56]);
 
     // ak = BLAKE2b-32(key=key, data="paseto-auth-key-for-aead"||nonce)
-    var h2 = Blake2b(32 * 8).init(.{ .key = &key });
+    var h2 = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h2));
+    setBlake2bKey(&h2, key);
     h2.update("paseto-auth-key-for-aead");
-    h2.update(&nonce);
+    h2.update(nonce);
     h2.final(&out.ak);
 
     return out;
+}
+
+/// Install a BLAKE2b key directly into a caller-owned state. Zig 0.16's keyed
+/// `init` returns a state containing the padded key block by value, which can
+/// leave the temporary return frame in exported WASM stack memory. Building
+/// the same parameter block in place gives the caller one state to wipe.
+inline fn setBlake2bKey(hasher: anytype, key: []const u8) void {
+    std.debug.assert(key.len > 0 and key.len <= 64);
+    hasher.h[0] ^= @as(u64, key.len << 8);
+    @memset(&hasher.buf, 0);
+    @memcpy(hasher.buf[0..key.len], key);
+    hasher.buf_len = Blake2b(8).block_length;
 }
 
 test "v4.local encrypt decrypt round trip" {

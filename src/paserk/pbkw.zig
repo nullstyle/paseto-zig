@@ -36,6 +36,25 @@ pub const V3Params = struct {
     iterations: u32,
 };
 
+pub const Policy = struct {
+    min_v4_memlimit_bytes: u64 = 64 * 1024 * 1024,
+    max_v4_memlimit_bytes: u64 = 256 * 1024 * 1024,
+    min_v4_opslimit: u32 = 2,
+    max_v4_opslimit: u32 = 3,
+    min_v3_iterations: u32 = 1000,
+    max_v3_iterations: u32 = 10_000,
+
+    pub const production: Policy = .{};
+    pub const testing: Policy = .{
+        .min_v4_memlimit_bytes = 1024,
+        .max_v4_memlimit_bytes = 256 * 1024 * 1024,
+        .min_v4_opslimit = 1,
+        .max_v4_opslimit = 3,
+        .min_v3_iterations = 1,
+        .max_v3_iterations = 10_000,
+    };
+};
+
 fn paserkHeader(version: Version, kind: Kind) []const u8 {
     return switch (version) {
         .v3 => switch (kind) {
@@ -62,8 +81,14 @@ fn validatePtk(version: Version, kind: Kind, len: usize) !void {
     }
 }
 
+fn validatePtkMaterial(version: Version, kind: Kind, ptk: []const u8) !void {
+    try validatePtk(version, kind, ptk.len);
+    try keys.validateKeyMaterial(version, kind.toKeyType(), ptk);
+}
+
 pub const WrapOptionsV4 = struct {
     params: V4Params,
+    policy: Policy = .production,
     /// Deterministic salt & nonce for test reproducibility.
     salt: ?[16]u8 = null,
     nonce: ?[24]u8 = null,
@@ -71,6 +96,7 @@ pub const WrapOptionsV4 = struct {
 
 pub const WrapOptionsV3 = struct {
     params: V3Params,
+    policy: Policy = .production,
     salt: ?[32]u8 = null,
     nonce: ?[16]u8 = null,
 };
@@ -82,7 +108,7 @@ pub fn wrapV4(
     ptk: []const u8,
     opts: WrapOptionsV4,
 ) ![]u8 {
-    try validatePtk(.v4, kind, ptk.len);
+    try validatePtkMaterial(.v4, kind, ptk);
 
     var salt: [16]u8 = undefined;
     var nonce: [24]u8 = undefined;
@@ -94,15 +120,16 @@ pub fn wrapV4(
     } else util.randomBytes(&nonce);
 
     var pre_key: [32]u8 = undefined;
-    try argon2id(allocator, &pre_key, password, &salt, opts.params);
+    defer util.secureZero(&pre_key);
+    try argon2id(allocator, &pre_key, password, &salt, opts.params, opts.policy);
 
     const edk = try allocator.alloc(u8, ptk.len);
-    defer allocator.free(edk);
+    defer util.secureFree(allocator, edk);
     try encryptV4(&pre_key, nonce, ptk, edk);
 
     const header = paserkHeader(.v4, kind);
     const body = try composeV4Body(allocator, header, &salt, opts.params, &nonce, edk, &pre_key);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
     return try encodePaserk(allocator, header, body);
 }
 
@@ -113,8 +140,8 @@ pub fn wrapV3(
     ptk: []const u8,
     opts: WrapOptionsV3,
 ) ![]u8 {
-    try validatePtk(.v3, kind, ptk.len);
-    try validateV3Params(opts.params);
+    try validatePtkMaterial(.v3, kind, ptk);
+    try validateV3Params(opts.params, opts.policy);
 
     var salt: [32]u8 = undefined;
     var nonce: [16]u8 = undefined;
@@ -126,16 +153,17 @@ pub fn wrapV3(
     } else util.randomBytes(&nonce);
 
     var pre_key: [32]u8 = undefined;
+    defer util.secureZero(&pre_key);
     pbkdf2(&pre_key, password, &salt, opts.params.iterations, HmacSha384) catch
         return Error.WeakParameters;
 
     const edk = try allocator.alloc(u8, ptk.len);
-    defer allocator.free(edk);
+    defer util.secureFree(allocator, edk);
     try encryptV3(&pre_key, nonce, ptk, edk);
 
     const header = paserkHeader(.v3, kind);
     const body = try composeV3Body(allocator, header, &salt, opts.params, &nonce, edk, &pre_key);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
     return try encodePaserk(allocator, header, body);
 }
 
@@ -148,6 +176,17 @@ pub fn unwrap(
     password: []const u8,
     paserk: []const u8,
 ) !Unwrapped {
+    return unwrapWithPolicy(allocator, password, paserk, .production);
+}
+
+pub fn unwrapWithPolicy(
+    allocator: std.mem.Allocator,
+    password: []const u8,
+    paserk: []const u8,
+    policy: Policy,
+) !Unwrapped {
+    if (paserk.len > util.max_paserk_string_bytes) return Error.InvalidEncoding;
+
     // Parse header: version.kind.base64
     const first_dot = std.mem.indexOfScalar(u8, paserk, '.') orelse return Error.InvalidEncoding;
     const version_s = paserk[0..first_dot];
@@ -164,12 +203,16 @@ pub fn unwrap(
     else
         return Error.UnsupportedOperation;
 
+    const expected_len = bodyLen(version, kind);
+    if (data_s.len != util.encodedBase64Len(expected_len)) return Error.InvalidEncoding;
+
     const body = try util.decodeBase64Alloc(allocator, data_s);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
+    if (body.len != expected_len) return Error.InvalidEncoding;
 
     switch (version) {
-        .v3 => return try unwrapV3(allocator, password, kind, body),
-        .v4 => return try unwrapV4(allocator, password, kind, body),
+        .v3 => return try unwrapV3(allocator, password, kind, body, policy),
+        .v4 => return try unwrapV4(allocator, password, kind, body, policy),
     }
 }
 
@@ -178,6 +221,7 @@ fn unwrapV4(
     password: []const u8,
     kind: Kind,
     body: []const u8,
+    policy: Policy,
 ) !Unwrapped {
     const min_len = 16 + 8 + 4 + 4 + 24 + 32;
     if (body.len < min_len) return Error.MessageTooShort;
@@ -199,7 +243,8 @@ fn unwrapV4(
     };
 
     var pre_key: [32]u8 = undefined;
-    try argon2id(allocator, &pre_key, password, salt, params);
+    defer util.secureZero(&pre_key);
+    try argon2id(allocator, &pre_key, password, salt, params, policy);
 
     const header = paserkHeader(.v4, kind);
 
@@ -208,10 +253,11 @@ fn unwrapV4(
     if (!util.constantTimeEqual(tag, &expected_tag)) return Error.InvalidAuthenticator;
 
     const out = try allocator.alloc(u8, edk.len);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     var nonce_arr: [24]u8 = undefined;
     @memcpy(&nonce_arr, nonce);
     try encryptV4(&pre_key, nonce_arr, edk, out);
+    try validatePtkMaterial(.v4, kind, out);
     return .{ .version = .v4, .kind = kind, .bytes = out, .allocator = allocator };
 }
 
@@ -220,6 +266,7 @@ fn unwrapV3(
     password: []const u8,
     kind: Kind,
     body: []const u8,
+    policy: Policy,
 ) !Unwrapped {
     const min_len = 32 + 4 + 16 + 48;
     if (body.len < min_len) return Error.MessageTooShort;
@@ -233,9 +280,10 @@ fn unwrapV3(
     try validatePtk(.v3, kind, edk.len);
 
     const params: V3Params = .{ .iterations = iterations };
-    try validateV3Params(params);
+    try validateV3Params(params, policy);
 
     var pre_key: [32]u8 = undefined;
+    defer util.secureZero(&pre_key);
     pbkdf2(&pre_key, password, salt, iterations, HmacSha384) catch
         return Error.WeakParameters;
 
@@ -245,29 +293,33 @@ fn unwrapV3(
     if (!util.constantTimeEqual(tag, &expected_tag)) return Error.InvalidAuthenticator;
 
     const out = try allocator.alloc(u8, edk.len);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     var nonce_arr: [16]u8 = undefined;
     @memcpy(&nonce_arr, nonce);
     try encryptV3(&pre_key, nonce_arr, edk, out);
+    try validatePtkMaterial(.v3, kind, out);
     return .{ .version = .v3, .kind = kind, .bytes = out, .allocator = allocator };
 }
 
-fn validateV4Params(params: V4Params) !void {
+fn validateV4Params(params: V4Params, policy: Policy) !void {
     // PASERK fixes the Argon2 parallelism factor at 1; any other value is
     // a caller error.
     if (params.para != 1) return Error.WeakParameters;
-    if (params.opslimit == 0) return Error.WeakParameters;
+    if (params.opslimit < policy.min_v4_opslimit) return Error.WeakParameters;
+    if (params.opslimit > policy.max_v4_opslimit) return Error.WeakParameters;
     // Argon2 measures memory in KiB, and the PASERK wire format records the
     // memlimit as bytes. Round-trip requires the caller's bytes value to be
     // an exact multiple of 1024; otherwise the wrapped + unwrapped inputs
     // would disagree after truncation.
-    if (params.memlimit_bytes < 1024) return Error.WeakParameters;
+    if (params.memlimit_bytes < policy.min_v4_memlimit_bytes) return Error.WeakParameters;
+    if (params.memlimit_bytes > policy.max_v4_memlimit_bytes) return Error.WeakParameters;
     if (params.memlimit_bytes % 1024 != 0) return Error.WeakParameters;
     if (params.memlimit_bytes / 1024 > std.math.maxInt(u32)) return Error.WeakParameters;
 }
 
-fn validateV3Params(params: V3Params) !void {
-    if (params.iterations == 0) return Error.WeakParameters;
+fn validateV3Params(params: V3Params, policy: Policy) !void {
+    if (params.iterations < policy.min_v3_iterations) return Error.WeakParameters;
+    if (params.iterations > policy.max_v3_iterations) return Error.WeakParameters;
 }
 
 fn argon2id(
@@ -276,8 +328,9 @@ fn argon2id(
     password: []const u8,
     salt: []const u8,
     params: V4Params,
+    policy: Policy,
 ) !void {
-    try validateV4Params(params);
+    try validateV4Params(params, policy);
     const memory_kib: u32 = @intCast(params.memlimit_bytes / 1024);
     const argon_params: argon2.Params = .{
         .t = params.opslimit,
@@ -299,9 +352,30 @@ fn argon2id(
     };
 }
 
+fn bodyLen(version: Version, kind: Kind) usize {
+    return switch (version) {
+        .v3 => 32 + 4 + 16 + ptkLen(version, kind) + 48,
+        .v4 => 16 + 8 + 4 + 4 + 24 + ptkLen(version, kind) + 32,
+    };
+}
+
+fn ptkLen(version: Version, kind: Kind) usize {
+    return switch (version) {
+        .v3 => switch (kind) {
+            .local => 32,
+            .secret => 48,
+        },
+        .v4 => switch (kind) {
+            .local => 32,
+            .secret => 64,
+        },
+    };
+}
+
 fn encryptV4(pre_key: []const u8, nonce: [24]u8, src: []const u8, dst: []u8) !void {
     std.debug.assert(src.len == dst.len);
     var ek: [32]u8 = undefined;
+    defer util.secureZero(&ek);
     var h = Blake2b(32 * 8).init(.{});
     var sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
     h.update(&sep);
@@ -313,12 +387,14 @@ fn encryptV4(pre_key: []const u8, nonce: [24]u8, src: []const u8, dst: []u8) !vo
 fn encryptV3(pre_key: []const u8, nonce: [16]u8, src: []const u8, dst: []u8) !void {
     std.debug.assert(src.len == dst.len);
     var ek_full: [48]u8 = undefined;
+    defer util.secureZero(&ek_full);
     var h = Sha384.init(.{});
     var sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
     h.update(&sep);
     h.update(pre_key);
     h.final(&ek_full);
     var ek: [32]u8 = undefined;
+    defer util.secureZero(&ek);
     @memcpy(&ek, ek_full[0..32]);
     const enc = Aes256.initEnc(ek);
     std.crypto.core.modes.ctr(@TypeOf(enc), enc, dst, src, nonce, .big);
@@ -335,6 +411,7 @@ fn macV4(
 ) void {
     std.debug.assert(out.len == 32);
     var ak: [32]u8 = undefined;
+    defer util.secureZero(&ak);
     var ak_hash = Blake2b(32 * 8).init(.{});
     var sep_a = [_]u8{DOMAIN_SEPARATOR_AUTH};
     ak_hash.update(&sep_a);
@@ -367,6 +444,7 @@ fn macV3(
 ) void {
     std.debug.assert(out.len == 48);
     var ak: [48]u8 = undefined;
+    defer util.secureZero(&ak);
     var ak_hash = Sha384.init(.{});
     var sep_a = [_]u8{DOMAIN_SEPARATOR_AUTH};
     ak_hash.update(&sep_a);
@@ -382,6 +460,7 @@ fn macV3(
     tag.update(nonce);
     tag.update(edk);
     var full: [48]u8 = undefined;
+    defer util.secureZero(&full);
     tag.final(&full);
     @memcpy(out[0..48], &full);
 }
@@ -397,7 +476,7 @@ fn composeV4Body(
 ) ![]u8 {
     const len = 16 + 8 + 4 + 4 + 24 + edk.len + 32;
     const out = try allocator.alloc(u8, len);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     var idx: usize = 0;
     @memcpy(out[idx..][0..16], salt);
     idx += 16;
@@ -431,7 +510,7 @@ fn composeV3Body(
 ) ![]u8 {
     const len = 32 + 4 + 16 + edk.len + 48;
     const out = try allocator.alloc(u8, len);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     var idx: usize = 0;
     @memcpy(out[idx..][0..32], salt);
     idx += 32;
@@ -468,11 +547,26 @@ test "wrapV4 rejects non-KiB-aligned memlimit_bytes" {
     }));
 }
 
-test "wrapV4 rejects memlimit_bytes below 1 KiB" {
+test "wrapV4 rejects memlimit_bytes below production minimum" {
     const allocator = std.testing.allocator;
     const key: [32]u8 = @splat(0x11);
     try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
         .params = .{ .memlimit_bytes = 512, .opslimit = 2 },
+        .salt = @as([16]u8, @splat(0x22)),
+        .nonce = @as([24]u8, @splat(0x33)),
+    }));
+}
+
+test "wrapV4 rejects excessive production params" {
+    const allocator = std.testing.allocator;
+    const key: [32]u8 = @splat(0x11);
+    try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
+        .params = .{ .memlimit_bytes = 512 * 1024 * 1024, .opslimit = 2 },
+        .salt = @as([16]u8, @splat(0x22)),
+        .nonce = @as([24]u8, @splat(0x33)),
+    }));
+    try std.testing.expectError(Error.WeakParameters, wrapV4(allocator, .local, "pw", &key, .{
+        .params = .{ .memlimit_bytes = 64 * 1024 * 1024, .opslimit = 4 },
         .salt = @as([16]u8, @splat(0x22)),
         .nonce = @as([24]u8, @splat(0x33)),
     }));
@@ -508,6 +602,21 @@ test "wrapV3 rejects zero iterations" {
     }));
 }
 
+test "wrapV3 rejects iterations outside production policy" {
+    const allocator = std.testing.allocator;
+    const key: [32]u8 = @splat(0x11);
+    try std.testing.expectError(Error.WeakParameters, wrapV3(allocator, .local, "pw", &key, .{
+        .params = .{ .iterations = 1 },
+        .salt = @as([32]u8, @splat(0x22)),
+        .nonce = @as([16]u8, @splat(0x33)),
+    }));
+    try std.testing.expectError(Error.WeakParameters, wrapV3(allocator, .local, "pw", &key, .{
+        .params = .{ .iterations = 100_000 },
+        .salt = @as([32]u8, @splat(0x22)),
+        .nonce = @as([16]u8, @splat(0x33)),
+    }));
+}
+
 test "unwrap rejects non-KiB-aligned memlimit from malicious paserk" {
     const allocator = std.testing.allocator;
     // Hand-craft a body with memlimit_bytes = 1500 so decoding must bail
@@ -515,6 +624,27 @@ test "unwrap rejects non-KiB-aligned memlimit from malicious paserk" {
     var body: [16 + 8 + 4 + 4 + 24 + 32 + 32]u8 = undefined;
     @memset(&body, 0);
     const memlimit_be = util.be64(1500);
+    @memcpy(body[16..24], &memlimit_be);
+    const opslimit_be = util.be32(2);
+    @memcpy(body[24..28], &opslimit_be);
+    const para_be = util.be32(1);
+    @memcpy(body[28..32], &para_be);
+
+    const encoded_len = util.encodedBase64Len(body.len);
+    const paserk = try allocator.alloc(u8, "k4.local-pw.".len + encoded_len);
+    defer allocator.free(paserk);
+    @memcpy(paserk[0.."k4.local-pw.".len], "k4.local-pw.");
+    _ = util.encodeBase64(paserk["k4.local-pw.".len..][0..encoded_len], &body);
+
+    try std.testing.expectError(Error.WeakParameters, unwrap(allocator, "pw", paserk));
+}
+
+test "unwrap rejects high-cost params before KDF" {
+    const allocator = std.testing.allocator;
+
+    var body: [16 + 8 + 4 + 4 + 24 + 32 + 32]u8 = undefined;
+    @memset(&body, 0);
+    const memlimit_be = util.be64(512 * 1024 * 1024);
     @memcpy(body[16..24], &memlimit_be);
     const opslimit_be = util.be32(2);
     @memcpy(body[24..28], &opslimit_be);

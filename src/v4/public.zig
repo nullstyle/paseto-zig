@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("../util.zig");
 const errors = @import("../errors.zig");
 const token_mod = @import("../token.zig");
+const claims_mod = @import("../claims.zig");
 const keys_mod = @import("../paserk/keys.zig");
 const id_mod = @import("../paserk/id.zig");
 const pke_mod = @import("../paserk/pke.zig");
@@ -35,6 +36,7 @@ pub const Public = struct {
     pub fn fromSeed(seed: []const u8) !Public {
         if (seed.len != seed_bytes) return Error.InvalidKey;
         var s: [seed_bytes]u8 = undefined;
+        defer util.secureZero(&s);
         @memcpy(&s, seed);
         const kp = Ed25519.KeyPair.generateDeterministic(s) catch return Error.InvalidKey;
         return .{ .public_key = kp.public_key.toBytes(), .keypair = kp };
@@ -43,6 +45,7 @@ pub const Public = struct {
     pub fn fromSecretKeyBytes(bytes: []const u8) !Public {
         if (bytes.len != secret_bytes) return Error.InvalidKey;
         var sk_bytes: [secret_bytes]u8 = undefined;
+        defer util.secureZero(&sk_bytes);
         @memcpy(&sk_bytes, bytes);
         const sk = Ed25519.SecretKey.fromBytes(sk_bytes) catch return Error.InvalidKey;
         const kp = Ed25519.KeyPair.fromSecretKey(sk) catch return Error.InvalidKey;
@@ -55,8 +58,20 @@ pub const Public = struct {
         return .{ .public_key = kp.public_key.toBytes(), .keypair = kp };
     }
 
+    pub fn fromPaserk(allocator: std.mem.Allocator, paserk: []const u8) !Public {
+        var decoded = try keys_mod.parse(allocator, paserk);
+        defer decoded.deinit();
+        if (decoded.version != .v4) return Error.WrongVersion;
+        return switch (decoded.kind) {
+            .public => try fromPublicKeyBytes(decoded.bytes),
+            .secret => try fromSecretKeyBytes(decoded.bytes),
+            .local => Error.WrongPurpose,
+        };
+    }
+
     pub fn generate() Public {
         var seed: [seed_bytes]u8 = undefined;
+        defer util.secureZero(&seed);
         util.randomBytes(&seed);
         return fromSeed(&seed) catch unreachable;
     }
@@ -95,13 +110,13 @@ pub const Public = struct {
             opts.implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         const sig = kp.sign(pae, null) catch return Error.InvalidSignature;
         const sig_bytes = sig.toBytes();
 
         const raw_payload = try allocator.alloc(u8, message.len + signature_bytes);
-        defer allocator.free(raw_payload);
+        defer util.secureFree(allocator, raw_payload);
         @memcpy(raw_payload[0..message.len], message);
         @memcpy(raw_payload[message.len..], &sig_bytes);
 
@@ -116,13 +131,28 @@ pub const Public = struct {
     ) ![]u8 {
         var tok = try token_mod.parse(allocator, token_str);
         defer tok.deinit();
-        return try self.verifyToken(allocator, tok, implicit_assertion);
+        return try self.verifyToken(allocator, &tok, implicit_assertion);
+    }
+
+    pub fn verifyWithFooter(
+        self: Public,
+        allocator: std.mem.Allocator,
+        token_str: []const u8,
+        implicit_assertion: []const u8,
+    ) !claims_mod.Result {
+        var tok = try token_mod.parse(allocator, token_str);
+        defer tok.deinit();
+        const plaintext = try self.verifyToken(allocator, &tok, implicit_assertion);
+        errdefer util.secureFree(allocator, plaintext);
+        const footer = try allocator.dupe(u8, tok.footer);
+        errdefer util.secureFree(allocator, footer);
+        return .{ .claims_bytes = plaintext, .footer = footer, .allocator = allocator };
     }
 
     pub fn verifyToken(
         self: Public,
         allocator: std.mem.Allocator,
-        tok: token_mod.Token,
+        tok: *const token_mod.Token,
         implicit_assertion: []const u8,
     ) ![]u8 {
         if (tok.version != .v4 or tok.purpose != .public) return Error.WrongPurpose;
@@ -143,7 +173,7 @@ pub const Public = struct {
             implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         const pk = Ed25519.PublicKey.fromBytes(self.public_key) catch return Error.InvalidKey;
         sig.verify(pae, pk) catch return Error.InvalidSignature;
@@ -158,7 +188,8 @@ pub const Public = struct {
     }
 
     pub fn paserkSecret(self: Public, allocator: std.mem.Allocator) ![]u8 {
-        const secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
+        var secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&secret);
         return try keys_mod.serialize(allocator, .v4, .secret, &secret);
     }
 
@@ -167,7 +198,8 @@ pub const Public = struct {
     }
 
     pub fn sid(self: Public) !id_mod.Id {
-        const secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
+        var secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&secret);
         return try id_mod.sid(.v4, &secret);
     }
 
@@ -188,7 +220,8 @@ pub const Public = struct {
         paserk: []const u8,
     ) ![]u8 {
         const kp = self.keypair orelse return Error.InvalidKeyPair;
-        const seed = kp.secret_key.seed();
+        var seed = kp.secret_key.seed();
+        defer util.secureZero(&seed);
         return try pke_mod.unsealV4(allocator, seed, paserk);
     }
 
@@ -200,7 +233,8 @@ pub const Public = struct {
         password: []const u8,
         opts: pbkw_mod.WrapOptionsV4,
     ) ![]u8 {
-        const secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
+        var secret = self.secretKeyBytes() orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&secret);
         return try pbkw_mod.wrapV4(allocator, .secret, password, &secret, opts);
     }
 };

@@ -40,7 +40,7 @@ pub fn wrap(
     opts: WrapOptions,
 ) ![]u8 {
     try validateWrappingKey(wrapping_key.len);
-    try validatePtk(version, kind, ptk.len);
+    try validatePtkMaterial(version, kind, ptk);
 
     var nonce: [nonce_bytes]u8 = undefined;
     if (opts.nonce) |n| {
@@ -58,7 +58,7 @@ pub fn wrap(
 
     // Encrypt in place into a ciphertext buffer.
     const ciphertext = try allocator.alloc(u8, ptk.len);
-    defer allocator.free(ciphertext);
+    defer util.secureFree(allocator, ciphertext);
     try encryptPayload(version, wrapping_key, nonce, ptk, ciphertext);
 
     // tag = MAC(header || nonce || ciphertext, key = ak)
@@ -68,7 +68,7 @@ pub fn wrap(
     // Encoded body: tag || nonce || ciphertext
     const body_len = mac_len + nonce_bytes + ciphertext.len;
     const body = try allocator.alloc(u8, body_len);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
     @memcpy(body[0..mac_len], mac_buf[0..mac_len]);
     @memcpy(body[mac_len .. mac_len + nonce_bytes], &nonce);
     @memcpy(body[mac_len + nonce_bytes ..], ciphertext);
@@ -91,6 +91,7 @@ pub fn unwrap(
     paserk: []const u8,
 ) !Unwrapped {
     try validateWrappingKey(wrapping_key.len);
+    if (paserk.len > util.max_paserk_string_bytes) return Error.InvalidEncoding;
 
     var it = std.mem.splitScalar(u8, paserk, '.');
     const version_s = it.next() orelse return Error.InvalidEncoding;
@@ -109,14 +110,17 @@ pub fn unwrap(
     else
         return Error.UnsupportedOperation;
 
+    const expected_len = bodyLen(version, kind);
+    if (data_s.len != util.encodedBase64Len(expected_len)) return Error.InvalidEncoding;
+
     const body = try util.decodeBase64Alloc(allocator, data_s);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
 
     const mac_len: usize = switch (version) {
         .v3 => 48,
         .v4 => 32,
     };
-    if (body.len < mac_len + nonce_bytes) return Error.MessageTooShort;
+    if (body.len != expected_len) return Error.InvalidEncoding;
 
     const tag = body[0..mac_len];
     const nonce_slice = body[mac_len .. mac_len + nonce_bytes];
@@ -132,13 +136,35 @@ pub fn unwrap(
     if (!util.constantTimeEqual(tag, expected_tag[0..mac_len])) return Error.InvalidAuthenticator;
 
     const out = try allocator.alloc(u8, ciphertext.len);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     try encryptPayload(version, wrapping_key, nonce_arr, ciphertext, out);
+    try validatePtkMaterial(version, kind, out);
     return .{
         .version = version,
         .kind = kind,
         .bytes = out,
         .allocator = allocator,
+    };
+}
+
+fn bodyLen(version: Version, kind: Kind) usize {
+    const mac_len: usize = switch (version) {
+        .v3 => 48,
+        .v4 => 32,
+    };
+    return mac_len + nonce_bytes + ptkLen(version, kind);
+}
+
+fn ptkLen(version: Version, kind: Kind) usize {
+    return switch (version) {
+        .v3 => switch (kind) {
+            .local => 32,
+            .secret => 48,
+        },
+        .v4 => switch (kind) {
+            .local => 32,
+            .secret => 64,
+        },
     };
 }
 
@@ -157,6 +183,11 @@ fn validatePtk(version: Version, kind: Kind, len: usize) !void {
             .secret => if (len != 64) return Error.InvalidKey,
         },
     }
+}
+
+fn validatePtkMaterial(version: Version, kind: Kind, ptk: []const u8) !void {
+    try validatePtk(version, kind, ptk.len);
+    try keys.validateKeyMaterial(version, kind.toKeyType(), ptk);
 }
 
 fn paserkHeader(version: Version, kind: Kind) []const u8 {
@@ -189,10 +220,13 @@ fn encryptPayload(
             input[0] = DOMAIN_SEPARATOR_ENCRYPT;
             @memcpy(input[1..], &nonce);
             var x: [48]u8 = undefined;
+            defer util.secureZero(&x);
             HmacSha384.create(&x, &input, wrapping_key);
             var ek: [32]u8 = undefined;
+            defer util.secureZero(&ek);
             @memcpy(&ek, x[0..32]);
             var iv: [16]u8 = undefined;
+            defer util.secureZero(&iv);
             @memcpy(&iv, x[32..48]);
             const enc = Aes256.initEnc(ek);
             std.crypto.core.modes.ctr(@TypeOf(enc), enc, dst, src, iv, .big);
@@ -200,14 +234,17 @@ fn encryptPayload(
         .v4 => {
             // x = BLAKE2b-56(wrapping_key, 0x80 || nonce)
             var x: [56]u8 = undefined;
+            defer util.secureZero(&x);
             var h = Blake2b(56 * 8).init(.{ .key = wrapping_key });
             var sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
             h.update(&sep);
             h.update(&nonce);
             h.final(&x);
             var ek: [32]u8 = undefined;
+            defer util.secureZero(&ek);
             @memcpy(&ek, x[0..32]);
             var n2: [24]u8 = undefined;
+            defer util.secureZero(&n2);
             @memcpy(&n2, x[32..56]);
             XChaCha20IETF.xor(dst, src, 0, ek, n2);
         },
@@ -229,8 +266,10 @@ fn macBody(
             input[0] = DOMAIN_SEPARATOR_AUTH;
             @memcpy(input[1..], &nonce);
             var ak_full: [48]u8 = undefined;
+            defer util.secureZero(&ak_full);
             HmacSha384.create(&ak_full, &input, wrapping_key);
             var ak: [32]u8 = undefined;
+            defer util.secureZero(&ak);
             @memcpy(&ak, ak_full[0..32]);
 
             var mac = HmacSha384.init(&ak);
@@ -238,12 +277,14 @@ fn macBody(
             mac.update(&nonce);
             mac.update(ciphertext);
             var full: [48]u8 = undefined;
+            defer util.secureZero(&full);
             mac.final(&full);
             @memcpy(out[0..48], &full);
         },
         .v4 => {
             // ak = BLAKE2b-32(wrapping_key, 0x81 || nonce)
             var ak: [32]u8 = undefined;
+            defer util.secureZero(&ak);
             var h_ak = Blake2b(32 * 8).init(.{ .key = wrapping_key });
             var sep = [_]u8{DOMAIN_SEPARATOR_AUTH};
             h_ak.update(&sep);
@@ -255,6 +296,7 @@ fn macBody(
             h_tag.update(&nonce);
             h_tag.update(ciphertext);
             var tag: [32]u8 = undefined;
+            defer util.secureZero(&tag);
             h_tag.final(&tag);
             @memcpy(out[0..32], &tag);
         },

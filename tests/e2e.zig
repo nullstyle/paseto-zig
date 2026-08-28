@@ -59,6 +59,16 @@ test "v4.local encrypt/decrypt + lid + PIE round trip" {
     defer allocator.free(plaintext);
     try std.testing.expectEqualStrings("{\"data\":\"top secret\"}", plaintext);
 
+    var decoded = try key.decryptWithFooter(allocator, tok, "api:v1");
+    defer decoded.deinit();
+    try std.testing.expectEqualStrings("{\"data\":\"top secret\"}", decoded.claims_bytes);
+    try std.testing.expectEqualStrings("{\"kid\":\"abc\"}", decoded.footer);
+
+    const local_paserk = try key.paserkLocal(allocator);
+    defer allocator.free(local_paserk);
+    const reparsed_key = try paseto.v4.Local.fromPaserk(allocator, local_paserk);
+    try std.testing.expect(key.eql(reparsed_key));
+
     const lid_id = try key.lid();
     try std.testing.expect(lid_id.version == .v4);
     try std.testing.expect(lid_id.kind == .lid);
@@ -98,6 +108,22 @@ test "v4.public sign + seal + unseal" {
     const verified = try signer.verify(allocator, tok, "");
     defer allocator.free(verified);
     try std.testing.expectEqualStrings("hello", verified);
+
+    const tok_with_footer = try signer.sign(allocator, "hello", .{ .footer = "kid:v4" });
+    defer allocator.free(tok_with_footer);
+    var verified_result = try signer.verifyWithFooter(allocator, tok_with_footer, "");
+    defer verified_result.deinit();
+    try std.testing.expectEqualStrings("hello", verified_result.claims_bytes);
+    try std.testing.expectEqualStrings("kid:v4", verified_result.footer);
+
+    const public_paserk = try signer.paserkPublic(allocator);
+    defer allocator.free(public_paserk);
+    const verifier = try paseto.v4.Public.fromPaserk(allocator, public_paserk);
+    try std.testing.expect(!verifier.isPrivate());
+    const secret_paserk = try signer.paserkSecret(allocator);
+    defer allocator.free(secret_paserk);
+    const signer_roundtrip = try paseto.v4.Public.fromPaserk(allocator, secret_paserk);
+    try std.testing.expect(signer_roundtrip.isPrivate());
 }
 
 test "v3.local encrypt round trip + wrapSecret" {
@@ -110,6 +136,11 @@ test "v3.local encrypt round trip + wrapSecret" {
     defer allocator.free(plaintext);
     try std.testing.expectEqualStrings("{\"x\":1}", plaintext);
 
+    const local_paserk = try key.paserkLocal(allocator);
+    defer allocator.free(local_paserk);
+    const reparsed_key = try paseto.v3.Local.fromPaserk(allocator, local_paserk);
+    try std.testing.expect(key.eql(reparsed_key));
+
     // Wrap a fake 48-byte scalar (bytes don't need to be a valid P-384 scalar
     // for PIE to work, since it's just symmetric encryption).
     const scalar: [48]u8 = @splat(0x42);
@@ -119,6 +150,28 @@ test "v3.local encrypt round trip + wrapSecret" {
     defer unwrapped.deinit();
     try std.testing.expect(unwrapped.kind == .secret);
     try std.testing.expectEqualSlices(u8, &scalar, unwrapped.bytes);
+}
+
+test "v3.public PASERK and footer result round trip" {
+    const allocator = std.testing.allocator;
+    const signer = try paseto.v3.Public.generate();
+
+    const tok = try signer.sign(allocator, "hello-v3", .{ .footer = "kid:v3" });
+    defer allocator.free(tok);
+    var verified = try signer.verifyWithFooter(allocator, tok, "");
+    defer verified.deinit();
+    try std.testing.expectEqualStrings("hello-v3", verified.claims_bytes);
+    try std.testing.expectEqualStrings("kid:v3", verified.footer);
+
+    const public_paserk = try signer.paserkPublic(allocator);
+    defer allocator.free(public_paserk);
+    const verifier = try paseto.v3.Public.fromPaserk(allocator, public_paserk);
+    try std.testing.expect(!verifier.isPrivate());
+
+    const secret_paserk = try signer.paserkSecret(allocator);
+    defer allocator.free(secret_paserk);
+    const signer_roundtrip = try paseto.v3.Public.fromPaserk(allocator, secret_paserk);
+    try std.testing.expect(signer_roundtrip.isPrivate());
 }
 
 test "claims validator: exp/nbf/iat and custom audience" {
@@ -241,6 +294,23 @@ test "claims validator rejects malformed required claims" {
         .now_override = 1_700_000_000,
     };
     try std.testing.expectError(paseto.Error.InvalidIssuer, validator.validate("{\"iss\":1}", allocator));
+}
+
+test "claims validator rejects missing expected claims" {
+    const allocator = std.testing.allocator;
+    const validator: paseto.Validator = .{
+        .expected_issuer = "auth.example.com",
+        .expected_audience = &.{"svc.example.com"},
+        .now_override = 1_700_000_000,
+    };
+    try std.testing.expectError(
+        paseto.Error.InvalidIssuer,
+        validator.validate("{\"aud\":\"svc.example.com\"}", allocator),
+    );
+    try std.testing.expectError(
+        paseto.Error.InvalidAudience,
+        validator.validate("{\"iss\":\"auth.example.com\"}", allocator),
+    );
 }
 
 test "key round trip via PEM (v4.public seed)" {

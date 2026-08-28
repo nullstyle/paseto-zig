@@ -15,6 +15,7 @@ const seeds = [_][]const u8{
 
 const id_errors = [_]paseto.Error{
     error.InvalidKey,
+    error.InvalidKeyPair,
 };
 
 const parse_errors = [_]paseto.Error{
@@ -120,7 +121,9 @@ fn validFuzz(_: void, s: *std.testing.Smith) anyerror!void {
     s.bytes(key_buf[0..len]);
     const key = key_buf[0..len];
 
-    const id_handle = try paseto.paserk.id.compute(version, kind, key);
+    const id_handle = paseto.paserk.id.compute(version, kind, key) catch |err| {
+        return support.expectAllowed(err, &id_errors);
+    };
     try std.testing.expect(id_handle.version == version);
     try std.testing.expect(id_handle.kind == kind);
 

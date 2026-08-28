@@ -1,6 +1,5 @@
-//! Byte-level PASERK serialization for key types. Operates on raw key
-//! material without validating point-on-curve semantics; callers performing
-//! cryptographic operations use the parsed key types in `v3`/`v4`.
+//! Byte-level PASERK serialization for key types. Parser paths validate key
+//! material where the stdlib exposes checks for the corresponding primitive.
 
 const std = @import("std");
 const util = @import("../util.zig");
@@ -9,6 +8,10 @@ const token_mod = @import("../token.zig");
 
 pub const Error = errors.Error;
 pub const Version = token_mod.Version;
+
+const Ed25519 = std.crypto.sign.Ed25519;
+const EcdsaP384Sha384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+const P384 = std.crypto.ecc.P384;
 
 pub const KeyType = enum {
     local,
@@ -31,6 +34,7 @@ pub fn serialize(
     key_bytes: []const u8,
 ) ![]u8 {
     try validateKeyLength(version, kind, key_bytes.len);
+    try validateKeyMaterial(version, kind, key_bytes);
     return try writeKeyPaserk(allocator, version, kind, key_bytes);
 }
 
@@ -73,7 +77,7 @@ pub const Decoded = struct {
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Decoded) void {
-        self.allocator.free(self.bytes);
+        util.secureFree(self.allocator, self.bytes);
         self.* = undefined;
     }
 };
@@ -106,12 +110,14 @@ pub const UnwrappedKey = struct {
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *UnwrappedKey) void {
-        self.allocator.free(self.bytes);
+        util.secureFree(self.allocator, self.bytes);
         self.* = undefined;
     }
 };
 
 pub fn parse(allocator: std.mem.Allocator, paserk: []const u8) !Decoded {
+    if (paserk.len > util.max_paserk_string_bytes) return Error.InvalidEncoding;
+
     var parts_it = std.mem.splitScalar(u8, paserk, '.');
     const version_s = parts_it.next() orelse return Error.InvalidEncoding;
     const kind_s = parts_it.next() orelse return Error.InvalidEncoding;
@@ -128,9 +134,12 @@ pub fn parse(allocator: std.mem.Allocator, paserk: []const u8) !Decoded {
     else
         return Error.UnsupportedOperation;
 
+    if (data_s.len != util.encodedBase64Len(keyLen(version, kind))) return Error.InvalidKey;
+
     const bytes = try util.decodeBase64Alloc(allocator, data_s);
-    errdefer allocator.free(bytes);
+    errdefer util.secureFree(allocator, bytes);
     try validateKeyLength(version, kind, bytes.len);
+    try validateKeyMaterial(version, kind, bytes);
     return .{
         .version = version,
         .kind = kind,
@@ -151,6 +160,45 @@ pub fn validateKeyLength(version: Version, kind: KeyType, len: usize) !void {
             .local => if (len != 32) return Error.InvalidKey,
             .public => if (len != 32) return Error.InvalidKey,
             .secret => if (len != 64) return Error.InvalidKey, // seed || pubkey
+        },
+    }
+}
+
+fn keyLen(version: Version, kind: KeyType) usize {
+    return switch (version) {
+        .v3 => switch (kind) {
+            .local => 32,
+            .public => 49,
+            .secret => 48,
+        },
+        .v4 => switch (kind) {
+            .local => 32,
+            .public => 32,
+            .secret => 64,
+        },
+    };
+}
+
+pub fn validateKeyMaterial(version: Version, kind: KeyType, bytes: []const u8) !void {
+    switch (version) {
+        .v3 => switch (kind) {
+            .local => {},
+            .public => _ = P384.fromSec1(bytes) catch return Error.InvalidKey,
+            .secret => _ = EcdsaP384Sha384.KeyPair.fromSecretKey(.{ .bytes = bytes[0..48].* }) catch
+                return Error.InvalidKey,
+        },
+        .v4 => switch (kind) {
+            .local => {},
+            .public => _ = Ed25519.PublicKey.fromBytes(bytes[0..32].*) catch return Error.InvalidKey,
+            .secret => {
+                const sk_bytes = bytes[0..64].*;
+                const sk = Ed25519.SecretKey.fromBytes(sk_bytes) catch return Error.InvalidKey;
+                const kp = Ed25519.KeyPair.fromSecretKey(sk) catch return Error.InvalidKey;
+                const derived = Ed25519.KeyPair.generateDeterministic(sk.seed()) catch return Error.InvalidKey;
+                if (!std.mem.eql(u8, &derived.public_key.toBytes(), &kp.public_key.toBytes())) {
+                    return Error.InvalidKeyPair;
+                }
+            },
         },
     }
 }

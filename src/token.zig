@@ -73,8 +73,8 @@ pub const Token = struct {
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Token) void {
-        self.allocator.free(self.payload);
-        self.allocator.free(self.footer);
+        util.secureFree(self.allocator, self.payload);
+        util.secureFree(self.allocator, self.footer);
         self.* = undefined;
     }
 
@@ -107,6 +107,8 @@ pub const Token = struct {
 
 /// Parse a PASETO string into its parts and base64url-decoded payload/footer.
 pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Token {
+    if (input.len > util.max_token_string_bytes) return Error.InvalidToken;
+
     var it = std.mem.splitScalar(u8, input, '.');
     const version_s = it.next() orelse return Error.InvalidToken;
     const purpose_s = it.next() orelse return Error.InvalidToken;
@@ -118,10 +120,10 @@ pub fn parse(allocator: std.mem.Allocator, input: []const u8) !Token {
     const purpose = Purpose.fromString(purpose_s) orelse return Error.UnsupportedPurpose;
 
     const payload = try util.decodeBase64Alloc(allocator, payload_s);
-    errdefer allocator.free(payload);
+    errdefer util.secureFree(allocator, payload);
 
     const footer = try util.decodeBase64Alloc(allocator, footer_s);
-    errdefer allocator.free(footer);
+    errdefer util.secureFree(allocator, footer);
 
     return .{
         .version = version,
@@ -145,9 +147,13 @@ pub fn serialize(
 
     const prefix = paeHeaderOf(version, purpose);
     // prefix already ends with '.' so we subtract 1 when computing total size.
-    var total: usize = prefix.len + payload_encoded_len;
+    var total = std.math.add(usize, prefix.len, payload_encoded_len) catch return Error.Overflow;
     const have_footer = raw_footer.len != 0;
-    if (have_footer) total += 1 + footer_encoded_len;
+    if (have_footer) {
+        total = std.math.add(usize, total, 1) catch return Error.Overflow;
+        total = std.math.add(usize, total, footer_encoded_len) catch return Error.Overflow;
+    }
+    if (total > util.max_token_string_bytes) return Error.InvalidToken;
 
     const out = try allocator.alloc(u8, total);
     errdefer allocator.free(out);

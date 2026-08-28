@@ -5,6 +5,11 @@ pub const Error = errors.Error;
 
 const b64 = std.base64.url_safe_no_pad;
 
+pub const max_token_string_bytes = 1024 * 1024;
+pub const max_claims_json_bytes = 64 * 1024;
+pub const max_pem_bytes = 64 * 1024;
+pub const max_paserk_string_bytes = 4096;
+
 pub fn encodedBase64Len(raw_len: usize) usize {
     return b64.Encoder.calcSize(raw_len);
 }
@@ -33,7 +38,7 @@ pub fn decodeBase64Alloc(allocator: std.mem.Allocator, encoded: []const u8) ![]u
     };
 
     const out = try allocator.alloc(u8, size);
-    errdefer allocator.free(out);
+    errdefer secureFree(allocator, out);
     b64.Decoder.decode(out, encoded) catch |err| switch (err) {
         error.InvalidCharacter => return Error.InvalidBase64,
         error.InvalidPadding => return Error.InvalidPadding,
@@ -106,7 +111,10 @@ pub fn preAuthEncodeAlloc(
     parts: []const []const u8,
 ) ![]u8 {
     var total: usize = 8;
-    for (parts) |p| total += 8 + p.len;
+    for (parts) |p| {
+        total = std.math.add(usize, total, 8) catch return Error.Overflow;
+        total = std.math.add(usize, total, p.len) catch return Error.Overflow;
+    }
 
     const out = try allocator.alloc(u8, total);
     errdefer allocator.free(out);
@@ -137,7 +145,7 @@ pub fn constantTimeEqual(a: []const u8, b: []const u8) bool {
 
 pub fn concatAlloc(allocator: std.mem.Allocator, parts: []const []const u8) ![]u8 {
     var total: usize = 0;
-    for (parts) |p| total += p.len;
+    for (parts) |p| total = std.math.add(usize, total, p.len) catch return Error.Overflow;
     const out = try allocator.alloc(u8, total);
     var idx: usize = 0;
     for (parts) |p| {
@@ -159,10 +167,19 @@ pub fn randomBytesWithIo(io: std.Io, buf: []u8) void {
     io.random(buf);
 }
 
+pub fn secureZero(buf: []u8) void {
+    std.crypto.secureZero(u8, buf);
+}
+
+pub fn secureFree(allocator: std.mem.Allocator, buf: []u8) void {
+    secureZero(buf);
+    allocator.free(buf);
+}
+
 pub fn hexDecodeAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
     if (hex.len % 2 != 0) return Error.InvalidEncoding;
     const out = try allocator.alloc(u8, hex.len / 2);
-    errdefer allocator.free(out);
+    errdefer secureFree(allocator, out);
     _ = std.fmt.hexToBytes(out, hex) catch return Error.InvalidEncoding;
     return out;
 }

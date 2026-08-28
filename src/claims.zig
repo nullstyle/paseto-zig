@@ -1,5 +1,6 @@
 const std = @import("std");
 const errors = @import("errors.zig");
+const util = @import("util.zig");
 
 pub const Error = errors.Error;
 
@@ -19,7 +20,7 @@ pub const Claims = struct {
     }
 
     pub fn deinit(self: *Claims) void {
-        self.allocator.free(self.json);
+        util.secureFree(self.allocator, @constCast(self.json));
         self.* = undefined;
     }
 
@@ -45,8 +46,8 @@ pub const Result = struct {
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Result) void {
-        self.allocator.free(self.claims_bytes);
-        self.allocator.free(self.footer);
+        util.secureFree(self.allocator, self.claims_bytes);
+        util.secureFree(self.allocator, self.footer);
         self.* = undefined;
     }
 };
@@ -67,6 +68,8 @@ pub const Validator = struct {
     now_override: ?i64 = null,
 
     pub fn validate(self: Validator, claims_bytes: []const u8, allocator: std.mem.Allocator) !void {
+        if (claims_bytes.len > util.max_claims_json_bytes) return Error.InvalidClaim;
+
         var parsed = std.json.parseFromSlice(std.json.Value, allocator, claims_bytes, .{}) catch {
             return Error.InvalidJson;
         };
@@ -100,9 +103,7 @@ pub const Validator = struct {
         }
 
         if (self.expected_issuer) |expected| {
-            const v = obj.get("iss") orelse {
-                return if (self.require_issuer) Error.InvalidIssuer else {};
-            };
+            const v = obj.get("iss") orelse return Error.InvalidIssuer;
             if (v != .string) return Error.InvalidIssuer;
             if (!std.mem.eql(u8, v.string, expected)) return Error.InvalidIssuer;
         } else if (self.require_issuer) {
@@ -111,9 +112,7 @@ pub const Validator = struct {
         }
 
         if (self.expected_audience) |list| {
-            const v = obj.get("aud") orelse {
-                return if (self.require_audience) Error.InvalidAudience else {};
-            };
+            const v = obj.get("aud") orelse return Error.InvalidAudience;
             if (v != .string) return Error.InvalidAudience;
             var matched = false;
             for (list) |candidate| {
@@ -129,9 +128,7 @@ pub const Validator = struct {
         }
 
         if (self.expected_subject) |expected| {
-            const v = obj.get("sub") orelse {
-                return if (self.require_subject) Error.InvalidSubject else {};
-            };
+            const v = obj.get("sub") orelse return Error.InvalidSubject;
             if (v != .string) return Error.InvalidSubject;
             if (!std.mem.eql(u8, v.string, expected)) return Error.InvalidSubject;
         } else if (self.require_subject) {
@@ -140,9 +137,7 @@ pub const Validator = struct {
         }
 
         if (self.expected_token_identifier) |expected| {
-            const v = obj.get("jti") orelse {
-                return if (self.require_token_identifier) Error.InvalidTokenIdentifier else {};
-            };
+            const v = obj.get("jti") orelse return Error.InvalidTokenIdentifier;
             if (v != .string) return Error.InvalidTokenIdentifier;
             if (!std.mem.eql(u8, v.string, expected)) return Error.InvalidTokenIdentifier;
         } else if (self.require_token_identifier) {
@@ -203,6 +198,7 @@ pub fn parseIsoTimestamp(v: std.json.Value) !i64 {
         const oh = try parseDecimal(u8, s, &idx, 2);
         if (idx < s.len and s[idx] == ':') idx += 1;
         const om = try parseDecimal(u8, s, &idx, 2);
+        if (oh > 23 or om >= 60) return Error.InvalidTime;
         offset_seconds = sign * (@as(i32, oh) * 3600 + @as(i32, om) * 60);
     } else {
         return Error.InvalidTime;
@@ -311,6 +307,33 @@ test "validator rejects required claims with wrong JSON types" {
 
     const v_jti: Validator = .{ .require_token_identifier = true, .now_override = 1_700_000_000 };
     try std.testing.expectError(Error.InvalidTokenIdentifier, v_jti.validate("{\"jti\":{}}", allocator));
+}
+
+test "validator expected claims are required" {
+    const allocator = std.testing.allocator;
+    const now = 1_700_000_000;
+    try std.testing.expectError(
+        Error.InvalidIssuer,
+        (Validator{ .expected_issuer = "issuer", .now_override = now }).validate("{}", allocator),
+    );
+    try std.testing.expectError(
+        Error.InvalidAudience,
+        (Validator{ .expected_audience = &.{"aud"}, .now_override = now }).validate("{}", allocator),
+    );
+    try std.testing.expectError(
+        Error.InvalidSubject,
+        (Validator{ .expected_subject = "sub", .now_override = now }).validate("{}", allocator),
+    );
+    try std.testing.expectError(
+        Error.InvalidTokenIdentifier,
+        (Validator{ .expected_token_identifier = "jti", .now_override = now }).validate("{}", allocator),
+    );
+}
+
+test "ISO8601 parsing rejects invalid timezone offsets" {
+    try std.testing.expectError(Error.InvalidTime, parseIsoTimestamp(.{ .string = "2022-01-01T00:00:00+24:00" }));
+    try std.testing.expectError(Error.InvalidTime, parseIsoTimestamp(.{ .string = "2022-01-01T00:00:00+00:60" }));
+    try std.testing.expectError(Error.InvalidTime, parseIsoTimestamp(.{ .string = "2022-01-01T00:00:00-99:99" }));
 }
 
 test "validator checks exp" {

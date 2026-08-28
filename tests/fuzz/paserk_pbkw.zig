@@ -98,29 +98,26 @@ fn roundTripV4Kind(kind: paseto.paserk.pbkw.Kind, s: *std.testing.Smith) anyerro
     const pw_n = s.slice(&pw_buf);
     const password = pw_buf[0..pw_n];
 
-    const ptk_len: usize = switch (kind) {
-        .local => 32,
-        .secret => 64,
-    };
     var ptk: [64]u8 = undefined;
-    s.bytes(ptk[0..ptk_len]);
+    const ptk_slice = try fillV4Ptk(kind, s, &ptk);
     var salt: [16]u8 = undefined;
     s.bytes(&salt);
     var nonce: [24]u8 = undefined;
     s.bytes(&nonce);
 
-    const wrapped = try paseto.paserk.pbkw.wrapV4(allocator, kind, password, ptk[0..ptk_len], .{
+    const wrapped = try paseto.paserk.pbkw.wrapV4(allocator, kind, password, ptk_slice, .{
         .params = support.PbkwV4FuzzParams,
+        .policy = paseto.paserk.pbkw.Policy.testing,
         .salt = salt,
         .nonce = nonce,
     });
     defer allocator.free(wrapped);
 
-    var unwrapped = try paseto.paserk.pbkw.unwrap(allocator, password, wrapped);
+    var unwrapped = try paseto.paserk.pbkw.unwrapWithPolicy(allocator, password, wrapped, .testing);
     defer unwrapped.deinit();
     try std.testing.expectEqual(.v4, unwrapped.version);
     try std.testing.expectEqual(kind, unwrapped.kind);
-    try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], unwrapped.bytes);
+    try std.testing.expectEqualSlices(u8, ptk_slice, unwrapped.bytes);
 }
 
 fn roundTripV3LocalFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -138,27 +135,91 @@ fn roundTripV3Kind(kind: paseto.paserk.pbkw.Kind, s: *std.testing.Smith) anyerro
     const pw_n = s.slice(&pw_buf);
     const password = pw_buf[0..pw_n];
 
-    const ptk_len: usize = switch (kind) {
-        .local => 32,
-        .secret => 48,
-    };
     var ptk: [64]u8 = undefined;
-    s.bytes(ptk[0..ptk_len]);
+    const ptk_slice = try fillV3Ptk(kind, s, &ptk);
     var salt: [32]u8 = undefined;
     s.bytes(&salt);
     var nonce: [16]u8 = undefined;
     s.bytes(&nonce);
 
-    const wrapped = try paseto.paserk.pbkw.wrapV3(allocator, kind, password, ptk[0..ptk_len], .{
+    const wrapped = try paseto.paserk.pbkw.wrapV3(allocator, kind, password, ptk_slice, .{
         .params = support.PbkwV3FuzzParams,
+        .policy = paseto.paserk.pbkw.Policy.testing,
         .salt = salt,
         .nonce = nonce,
     });
     defer allocator.free(wrapped);
 
-    var unwrapped = try paseto.paserk.pbkw.unwrap(allocator, password, wrapped);
+    var unwrapped = try paseto.paserk.pbkw.unwrapWithPolicy(allocator, password, wrapped, .testing);
     defer unwrapped.deinit();
     try std.testing.expectEqual(.v3, unwrapped.version);
     try std.testing.expectEqual(kind, unwrapped.kind);
-    try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], unwrapped.bytes);
+    try std.testing.expectEqualSlices(u8, ptk_slice, unwrapped.bytes);
+}
+
+fn fillV4Ptk(
+    kind: paseto.paserk.pbkw.Kind,
+    s: *std.testing.Smith,
+    ptk: *[64]u8,
+) ![]const u8 {
+    switch (kind) {
+        .local => {
+            s.bytes(ptk[0..32]);
+            return ptk[0..32];
+        },
+        .secret => {
+            var seed: [32]u8 = undefined;
+            defer paseto.util.secureZero(&seed);
+            s.bytes(&seed);
+            const key = try paseto.v4.Public.fromSeed(&seed);
+            var secret = key.secretKeyBytes().?;
+            defer paseto.util.secureZero(&secret);
+            @memcpy(ptk[0..64], &secret);
+            return ptk[0..64];
+        },
+    }
+}
+
+fn fillV3Ptk(
+    kind: paseto.paserk.pbkw.Kind,
+    s: *std.testing.Smith,
+    ptk: *[64]u8,
+) ![]const u8 {
+    switch (kind) {
+        .local => {
+            s.bytes(ptk[0..32]);
+            return ptk[0..32];
+        },
+        .secret => {
+            s.bytes(ptk[0..48]);
+            var attempts: usize = 0;
+            while (attempts < 1024) : (attempts += 1) {
+                _ = paseto.v3.Public.fromScalarBytes(ptk[0..48]) catch {
+                    incrementBigEndian(ptk[0..48]);
+                    continue;
+                };
+                return ptk[0..48];
+            }
+
+            const fallback = [_]u8{
+                0x20, 0x34, 0x76, 0x09, 0x60, 0x74, 0x77, 0xac,
+                0xa8, 0xfb, 0xfb, 0xc5, 0xe6, 0x21, 0x84, 0x55,
+                0xf3, 0x19, 0x96, 0x69, 0x79, 0x2e, 0xf8, 0xb4,
+                0x66, 0xfa, 0xa8, 0x7b, 0xdc, 0x67, 0x79, 0x81,
+                0x44, 0xc8, 0x48, 0xdd, 0x03, 0x66, 0x1e, 0xed,
+                0x5a, 0xc6, 0x24, 0x61, 0x34, 0x0c, 0xea, 0x96,
+            };
+            @memcpy(ptk[0..48], &fallback);
+            return ptk[0..48];
+        },
+    }
+}
+
+fn incrementBigEndian(buf: []u8) void {
+    var i = buf.len;
+    while (i > 0) {
+        i -= 1;
+        buf[i] +%= 1;
+        if (buf[i] != 0) break;
+    }
 }

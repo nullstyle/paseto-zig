@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("../util.zig");
 const errors = @import("../errors.zig");
 const token_mod = @import("../token.zig");
+const claims_mod = @import("../claims.zig");
 const keys_mod = @import("../paserk/keys.zig");
 const id_mod = @import("../paserk/id.zig");
 const pke_mod = @import("../paserk/pke.zig");
@@ -54,12 +55,28 @@ pub const Public = struct {
         return .{ .public_point = kp.public_key.p, .secret_scalar = scalar };
     }
 
+    pub fn fromPaserk(allocator: std.mem.Allocator, paserk: []const u8) !Public {
+        var decoded = try keys_mod.parse(allocator, paserk);
+        defer decoded.deinit();
+        if (decoded.version != .v3) return Error.WrongVersion;
+        return switch (decoded.kind) {
+            .public => try fromPublicBytesCompressed(decoded.bytes),
+            .secret => try fromScalarBytes(decoded.bytes),
+            .local => Error.WrongPurpose,
+        };
+    }
+
     pub fn generate() !Public {
         // Pick a random 48-byte scalar in [1, n-1] by rejection.
         while (true) {
             var scalar: [scalar_bytes]u8 = undefined;
             util.randomBytes(&scalar);
-            return fromScalarBytes(&scalar) catch continue;
+            const key = fromScalarBytes(&scalar) catch {
+                util.secureZero(&scalar);
+                continue;
+            };
+            util.secureZero(&scalar);
+            return key;
         }
     }
 
@@ -90,7 +107,8 @@ pub const Public = struct {
         message: []const u8,
         opts: SignOptions,
     ) ![]u8 {
-        const scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        var scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&scalar);
         const kp = EcdsaP384Sha384.KeyPair.fromSecretKey(.{ .bytes = scalar }) catch
             return Error.InvalidKeyPair;
         const public_bytes = self.publicCompressed();
@@ -103,17 +121,18 @@ pub const Public = struct {
             opts.implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         // Zig's EcdsaP384Sha384.sign requires a noise value for side-channel
         // protection. We derive it from OS randomness.
         var noise: [EcdsaP384Sha384.noise_length]u8 = undefined;
+        defer util.secureZero(&noise);
         util.randomBytes(&noise);
         const sig = kp.sign(pae, noise) catch return Error.InvalidSignature;
         const sig_bytes = sig.toBytes();
 
         const raw_payload = try allocator.alloc(u8, message.len + signature_bytes);
-        defer allocator.free(raw_payload);
+        defer util.secureFree(allocator, raw_payload);
         @memcpy(raw_payload[0..message.len], message);
         @memcpy(raw_payload[message.len..], &sig_bytes);
 
@@ -128,13 +147,28 @@ pub const Public = struct {
     ) ![]u8 {
         var tok = try token_mod.parse(allocator, token_str);
         defer tok.deinit();
-        return try self.verifyToken(allocator, tok, implicit_assertion);
+        return try self.verifyToken(allocator, &tok, implicit_assertion);
+    }
+
+    pub fn verifyWithFooter(
+        self: Public,
+        allocator: std.mem.Allocator,
+        token_str: []const u8,
+        implicit_assertion: []const u8,
+    ) !claims_mod.Result {
+        var tok = try token_mod.parse(allocator, token_str);
+        defer tok.deinit();
+        const plaintext = try self.verifyToken(allocator, &tok, implicit_assertion);
+        errdefer util.secureFree(allocator, plaintext);
+        const footer = try allocator.dupe(u8, tok.footer);
+        errdefer util.secureFree(allocator, footer);
+        return .{ .claims_bytes = plaintext, .footer = footer, .allocator = allocator };
     }
 
     pub fn verifyToken(
         self: Public,
         allocator: std.mem.Allocator,
-        tok: token_mod.Token,
+        tok: *const token_mod.Token,
         implicit_assertion: []const u8,
     ) ![]u8 {
         if (tok.version != .v3 or tok.purpose != .public) return Error.WrongPurpose;
@@ -157,7 +191,7 @@ pub const Public = struct {
             implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         const pubkey = EcdsaP384Sha384.PublicKey{ .p = self.public_point };
         sig.verify(pae, pubkey) catch return Error.InvalidSignature;
@@ -173,7 +207,8 @@ pub const Public = struct {
     }
 
     pub fn paserkSecret(self: Public, allocator: std.mem.Allocator) ![]u8 {
-        const scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        var scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&scalar);
         return try keys_mod.serialize(allocator, .v3, .secret, &scalar);
     }
 
@@ -183,7 +218,8 @@ pub const Public = struct {
     }
 
     pub fn sid(self: Public) !id_mod.Id {
-        const scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        var scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&scalar);
         return try id_mod.sid(.v3, &scalar);
     }
 
@@ -203,7 +239,8 @@ pub const Public = struct {
         allocator: std.mem.Allocator,
         paserk: []const u8,
     ) ![]u8 {
-        const scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        var scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&scalar);
         return try pke_mod.unsealV3(allocator, scalar, paserk);
     }
 
@@ -213,7 +250,8 @@ pub const Public = struct {
         password: []const u8,
         opts: pbkw_mod.WrapOptionsV3,
     ) ![]u8 {
-        const scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        var scalar = self.secret_scalar orelse return Error.InvalidKeyPair;
+        defer util.secureZero(&scalar);
         return try pbkw_mod.wrapV3(allocator, .secret, password, &scalar, opts);
     }
 };

@@ -97,6 +97,8 @@ pub const Id = struct {
     }
 
     pub fn parse(paserk_id: []const u8) !Id {
+        if (paserk_id.len != string_bytes) return Error.InvalidKeyId;
+
         var parts_it = std.mem.splitScalar(u8, paserk_id, '.');
         const version_s = parts_it.next() orelse return Error.InvalidKeyId;
         const kind_s = parts_it.next() orelse return Error.InvalidKeyId;
@@ -199,6 +201,7 @@ pub fn parse(paserk_id: []const u8) !Id {
 
 fn computeDigest(version: Version, kind: IdKind, key_bytes: []const u8) ![digest_bytes]u8 {
     try keys.validateKeyLength(version, kind.sourceKind(), key_bytes.len);
+    try keys.validateKeyMaterial(version, kind.sourceKind(), key_bytes);
 
     const id_header = headerFor(version, kind);
     const key_header = sourceHeaderFor(version, kind.sourceKind());
@@ -336,23 +339,28 @@ test "Id parse rejects malformed ids" {
 test "Id parse rejects raw PASERK keys" {
     const allocator = std.testing.allocator;
 
-    const cases = [_]struct {
-        version: Version,
-        kind: keys.KeyType,
-        len: usize,
-    }{
-        .{ .version = .v4, .kind = .public, .len = 32 },
-        .{ .version = .v4, .kind = .secret, .len = 64 },
-        .{ .version = .v4, .kind = .local, .len = 32 },
-        .{ .version = .v3, .kind = .public, .len = 49 },
-        .{ .version = .v3, .kind = .secret, .len = 48 },
-        .{ .version = .v3, .kind = .local, .len = 32 },
-    };
+    const local_key: [32]u8 = @splat(0);
+    const v4_local = try keys.serialize(allocator, .v4, .local, &local_key);
+    defer allocator.free(v4_local);
+    const v3_local = try keys.serialize(allocator, .v3, .local, &local_key);
+    defer allocator.free(v3_local);
 
-    var key_buf: [64]u8 = @splat(0);
-    for (cases) |case| {
-        const paserk_key = try keys.serialize(allocator, case.version, case.kind, key_buf[0..case.len]);
-        defer allocator.free(paserk_key);
-        try std.testing.expectError(Error.UnsupportedOperation, Id.parse(paserk_key));
+    const V4Public = @import("../v4/public.zig").Public;
+    const v4_public_key = V4Public.generate();
+    const v4_public = try v4_public_key.paserkPublic(allocator);
+    defer allocator.free(v4_public);
+    const v4_secret = try v4_public_key.paserkSecret(allocator);
+    defer allocator.free(v4_secret);
+
+    const V3Public = @import("../v3/public.zig").Public;
+    const v3_public_key = try V3Public.generate();
+    const v3_public = try v3_public_key.paserkPublic(allocator);
+    defer allocator.free(v3_public);
+    const v3_secret = try v3_public_key.paserkSecret(allocator);
+    defer allocator.free(v3_secret);
+
+    const paserk_keys = [_][]const u8{ v4_public, v4_secret, v4_local, v3_public, v3_secret, v3_local };
+    for (paserk_keys) |paserk_key| {
+        try std.testing.expectError(Error.InvalidKeyId, Id.parse(paserk_key));
     }
 }

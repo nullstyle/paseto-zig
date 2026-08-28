@@ -9,6 +9,10 @@ const errors = @import("errors.zig");
 
 pub const Error = errors.Error;
 
+const Ed25519 = std.crypto.sign.Ed25519;
+const EcdsaP384Sha384 = std.crypto.sign.ecdsa.EcdsaP384Sha384;
+const P384 = std.crypto.ecc.P384;
+
 pub const KeyFormat = enum {
     /// Ed25519 32-byte seed.
     ed25519_seed,
@@ -32,7 +36,7 @@ pub const Parsed = struct {
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Parsed) void {
-        self.allocator.free(self.bytes);
+        util.secureFree(self.allocator, self.bytes);
         self.* = undefined;
     }
 };
@@ -59,6 +63,8 @@ const Label = enum {
     }
 };
 
+const label_values = [_]Label{ .private_key, .public_key, .ec_private_key };
+
 fn isPemWhitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\r' or c == '\n';
 }
@@ -70,6 +76,8 @@ pub fn pemToDer(allocator: std.mem.Allocator, pem_text: []const u8) !struct {
     label: Label,
     der: []u8,
 } {
+    if (pem_text.len > util.max_pem_bytes) return Error.InvalidEncoding;
+
     // Skip leading whitespace; the first non-whitespace byte must begin a
     // recognized header.
     var start: usize = 0;
@@ -77,8 +85,7 @@ pub fn pemToDer(allocator: std.mem.Allocator, pem_text: []const u8) !struct {
     if (start == pem_text.len) return Error.InvalidEncoding;
 
     const label = blk: {
-        inline for (@typeInfo(Label).@"enum".fields) |f| {
-            const l: Label = @enumFromInt(f.value);
+        inline for (label_values) |l| {
             const tag = l.beginTag();
             if (pem_text.len - start >= tag.len and
                 std.mem.eql(u8, pem_text[start .. start + tag.len], tag))
@@ -107,7 +114,10 @@ pub fn pemToDer(allocator: std.mem.Allocator, pem_text: []const u8) !struct {
     // Strip whitespace from the body only. Any remaining byte must belong
     // to the standard base64 alphabet — the decoder will enforce that.
     var stripped = try std.ArrayList(u8).initCapacity(allocator, body.len);
-    defer stripped.deinit(allocator);
+    defer {
+        util.secureZero(stripped.items);
+        stripped.deinit(allocator);
+    }
     for (body) |c| {
         if (isPemWhitespace(c)) continue;
         // Reject any embedded header fragment (e.g. a second BEGIN block).
@@ -118,7 +128,7 @@ pub fn pemToDer(allocator: std.mem.Allocator, pem_text: []const u8) !struct {
     const decoder = std.base64.standard.Decoder;
     const size = decoder.calcSizeForSlice(stripped.items) catch return Error.InvalidBase64;
     const der = try allocator.alloc(u8, size);
-    errdefer allocator.free(der);
+    errdefer util.secureFree(allocator, der);
     decoder.decode(der, stripped.items) catch return Error.InvalidBase64;
     return .{ .label = label, .der = der };
 }
@@ -126,12 +136,13 @@ pub fn pemToDer(allocator: std.mem.Allocator, pem_text: []const u8) !struct {
 /// Parse a PEM-encoded key into its raw primitive bytes.
 pub fn parse(allocator: std.mem.Allocator, pem_text: []const u8) !Parsed {
     const dec = try pemToDer(allocator, pem_text);
-    defer allocator.free(dec.der);
+    defer util.secureFree(allocator, dec.der);
 
     switch (dec.label) {
         .ec_private_key => {
-            const scalar = try parseSec1EcPrivateKey(dec.der);
-            const bytes = try allocator.alloc(u8, scalar.len);
+            const scalar = try parseSec1EcPrivateKey(dec.der, true);
+            const bytes = try allocator.alloc(u8, 48);
+            errdefer util.secureFree(allocator, bytes);
             @memcpy(bytes, scalar);
             return .{ .format = .p384_scalar, .bytes = bytes, .allocator = allocator };
         },
@@ -141,16 +152,18 @@ pub fn parse(allocator: std.mem.Allocator, pem_text: []const u8) !Parsed {
                 .ed25519 => {
                     // Ed25519 PKCS#8 inner key is OCTET STRING wrapping a
                     // 32-byte seed OCTET STRING.
-                    const seed_oct = try readTag(inner.private_key_bytes, 0x04);
+                    const seed_oct = try readTagExhaustive(inner.private_key_bytes, 0x04);
                     if (seed_oct.value.len != 32) return Error.InvalidKey;
                     const bytes = try allocator.alloc(u8, 32);
+                    errdefer util.secureFree(allocator, bytes);
                     @memcpy(bytes, seed_oct.value);
                     return .{ .format = .ed25519_seed, .bytes = bytes, .allocator = allocator };
                 },
                 .ec_p384 => {
                     // PKCS#8 wraps an SEC1 ECPrivateKey.
-                    const scalar = try parseSec1EcPrivateKey(inner.private_key_bytes);
-                    const bytes = try allocator.alloc(u8, scalar.len);
+                    const scalar = try parseSec1EcPrivateKey(inner.private_key_bytes, false);
+                    const bytes = try allocator.alloc(u8, 48);
+                    errdefer util.secureFree(allocator, bytes);
                     @memcpy(bytes, scalar);
                     return .{ .format = .p384_scalar, .bytes = bytes, .allocator = allocator };
                 },
@@ -161,7 +174,9 @@ pub fn parse(allocator: std.mem.Allocator, pem_text: []const u8) !Parsed {
             switch (spki.algorithm) {
                 .ed25519 => {
                     if (spki.bit_string.len != 32) return Error.InvalidKey;
+                    _ = Ed25519.PublicKey.fromBytes(spki.bit_string[0..32].*) catch return Error.InvalidKey;
                     const bytes = try allocator.alloc(u8, 32);
+                    errdefer util.secureFree(allocator, bytes);
                     @memcpy(bytes, spki.bit_string);
                     return .{ .format = .ed25519_public, .bytes = bytes, .allocator = allocator };
                 },
@@ -171,14 +186,19 @@ pub fn parse(allocator: std.mem.Allocator, pem_text: []const u8) !Parsed {
                     if (in.len == 0) return Error.InvalidKey;
                     const bytes = switch (in[0]) {
                         0x02, 0x03 => blk: {
-                            const out = try allocator.alloc(u8, in.len);
+                            if (in.len != 49) return Error.InvalidKey;
+                            _ = P384.fromSec1(in) catch return Error.InvalidKey;
+                            const out = try allocator.alloc(u8, 49);
+                            errdefer util.secureFree(allocator, out);
                             @memcpy(out, in);
                             break :blk out;
                         },
                         0x04 => blk: {
                             // Convert uncompressed -> compressed.
                             if (in.len != 97) return Error.InvalidKey;
+                            _ = P384.fromSec1(in) catch return Error.InvalidKey;
                             const out = try allocator.alloc(u8, 49);
+                            errdefer util.secureFree(allocator, out);
                             const parity: u8 = if ((in[96] & 1) == 1) 0x03 else 0x02;
                             out[0] = parity;
                             @memcpy(out[1..49], in[1..49]);
@@ -214,8 +234,9 @@ fn readAnyTag(input: []const u8) !TagValue {
         }
         idx += n;
     }
-    if (idx + len > input.len) return Error.InvalidEncoding;
-    return .{ .tag = tag, .value = input[idx .. idx + len], .rest = input[idx + len ..] };
+    const end = std.math.add(usize, idx, len) catch return Error.Overflow;
+    if (end > input.len) return Error.InvalidEncoding;
+    return .{ .tag = tag, .value = input[idx..end], .rest = input[end..] };
 }
 
 fn readTag(input: []const u8, expected: u8) !TagValue {
@@ -276,7 +297,7 @@ fn consumeAlgorithmIdentifier(input: []const u8) !struct { algorithm: Algorithm,
     return Error.UnsupportedVersion;
 }
 
-fn parseSec1EcPrivateKey(der: []const u8) ![]const u8 {
+fn parseSec1EcPrivateKey(der: []const u8, require_p384_params: bool) ![]const u8 {
     // ECPrivateKey ::= SEQUENCE {
     //   version INTEGER (1),
     //   privateKey OCTET STRING,
@@ -288,17 +309,36 @@ fn parseSec1EcPrivateKey(der: []const u8) ![]const u8 {
     const version_tv = try readTag(outer.value, 0x02);
     if (version_tv.value.len != 1 or version_tv.value[0] != 0x01) return Error.InvalidEncoding;
     const priv_tv = try readTag(version_tv.rest, 0x04);
+    try validateP384Scalar(priv_tv.value);
     // The remaining fields are optional context-specific tags [0] and [1].
     // We don't use them, but we must walk them to confirm well-formedness
     // instead of silently accepting garbage.
     var remaining = priv_tv.rest;
+    var saw_params = false;
     while (remaining.len > 0) {
         const tv = try readAnyTag(remaining);
         // Accept either [0] (0xA0) or [1] (0xA1) explicit tags, in order.
         if (tv.tag != 0xA0 and tv.tag != 0xA1) return Error.InvalidEncoding;
+        if (tv.tag == 0xA0) {
+            if (saw_params) return Error.InvalidEncoding;
+            saw_params = true;
+            const oid_tv = try readTagExhaustive(tv.value, 0x06);
+            if (!oidEquals(oid_tv.value, oid_secp384r1)) return Error.UnsupportedVersion;
+        } else {
+            const bit_tv = try readTagExhaustive(tv.value, 0x03);
+            if (bit_tv.value.len == 0 or bit_tv.value[0] != 0) return Error.InvalidEncoding;
+            _ = P384.fromSec1(bit_tv.value[1..]) catch return Error.InvalidKey;
+        }
         remaining = tv.rest;
     }
+    if (require_p384_params and !saw_params) return Error.UnsupportedVersion;
     return priv_tv.value;
+}
+
+fn validateP384Scalar(scalar: []const u8) !void {
+    if (scalar.len != 48) return Error.InvalidKey;
+    _ = EcdsaP384Sha384.KeyPair.fromSecretKey(.{ .bytes = scalar[0..48].* }) catch
+        return Error.InvalidKey;
 }
 
 const Pkcs8Parsed = struct {
@@ -507,6 +547,32 @@ test "parse rejects Ed25519 AlgorithmIdentifier with trailing parameters" {
     defer allocator.free(pem);
 
     try std.testing.expectError(Error.InvalidEncoding, parse(allocator, pem));
+}
+
+test "parse rejects short compressed P-384 public key" {
+    const allocator = std.testing.allocator;
+    const der = [_]u8{
+        0x30, 0x45, // outer SEQUENCE, len 69
+        0x30, 0x10, // AlgorithmIdentifier SEQUENCE, len 16
+        0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, // ecPublicKey
+        0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22, // secp384r1
+        0x03, 0x31, 0x00, 0x02, // BIT STRING: 0 unused bits, short compressed point
+    } ++ @as([47]u8, @splat(0x00));
+
+    const encoder = std.base64.standard.Encoder;
+    const enc_len = encoder.calcSize(der.len);
+    const enc = try allocator.alloc(u8, enc_len);
+    defer allocator.free(enc);
+    _ = encoder.encode(enc, &der);
+
+    const pem = try std.mem.concat(allocator, u8, &.{
+        "-----BEGIN PUBLIC KEY-----\n",
+        enc,
+        "\n-----END PUBLIC KEY-----\n",
+    });
+    defer allocator.free(pem);
+
+    try std.testing.expectError(Error.InvalidKey, parse(allocator, pem));
 }
 
 test "parse v3 test vector public key PEM" {

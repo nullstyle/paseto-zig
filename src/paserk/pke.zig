@@ -41,6 +41,7 @@ pub fn sealV4(
 
     // Ephemeral X25519 key pair.
     var esk: [32]u8 = undefined;
+    defer util.secureZero(&esk);
     if (ephemeral_override) |e| {
         @memcpy(&esk, &e);
     } else {
@@ -49,17 +50,22 @@ pub fn sealV4(
     const epk = X25519.recoverPublicKey(esk) catch return Error.InvalidKey;
 
     // Shared secret.
-    const xk = X25519.scalarmult(esk, recipient_pk_x) catch return Error.InvalidKey;
+    var xk = X25519.scalarmult(esk, recipient_pk_x) catch return Error.InvalidKey;
+    defer util.secureZero(&xk);
 
     var ek: [32]u8 = undefined;
+    defer util.secureZero(&ek);
     var n: [24]u8 = undefined;
+    defer util.secureZero(&n);
     deriveEkNV4(ek[0..], n[0..], &xk, &epk, &recipient_pk_x);
 
     var ak: [32]u8 = undefined;
+    defer util.secureZero(&ak);
     deriveAkV4(&ak, &xk, &epk, &recipient_pk_x);
 
     // edk = XChaCha20(ptk, ek, n)
     var edk_buf: [64]u8 = undefined;
+    defer util.secureZero(&edk_buf);
     const edk = edk_buf[0..ptk.len];
     XChaCha20IETF.xor(edk, ptk, 0, ek, n);
 
@@ -73,7 +79,7 @@ pub fn sealV4(
 
     const body_len = 32 + 32 + edk.len;
     const body = try allocator.alloc(u8, body_len);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
     @memcpy(body[0..32], &tag);
     @memcpy(body[32..64], &epk);
     @memcpy(body[64..], edk);
@@ -109,12 +115,14 @@ fn unsealV4Raw(
     recipient_public: [32]u8,
     paserk: []const u8,
 ) ![]u8 {
+    if (paserk.len > util.max_paserk_string_bytes) return Error.InvalidEncoding;
     if (!std.mem.startsWith(u8, paserk, k4_header)) return Error.InvalidEncoding;
     const data = paserk[k4_header.len..];
+    if (data.len != util.encodedBase64Len(32 + 32 + 32)) return Error.InvalidEncoding;
     const body = try util.decodeBase64Alloc(allocator, data);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
 
-    if (body.len < 32 + 32 + 1) return Error.MessageTooShort;
+    if (body.len != 32 + 32 + 32) return Error.InvalidEncoding;
     const tag = body[0..32];
     const epk_slice = body[32..64];
     const edk = body[64..];
@@ -123,9 +131,11 @@ fn unsealV4Raw(
     var epk: [32]u8 = undefined;
     @memcpy(&epk, epk_slice);
 
-    const xk = X25519.scalarmult(recipient_secret, epk) catch return Error.InvalidKey;
+    var xk = X25519.scalarmult(recipient_secret, epk) catch return Error.InvalidKey;
+    defer util.secureZero(&xk);
 
     var ak: [32]u8 = undefined;
+    defer util.secureZero(&ak);
     deriveAkV4(&ak, &xk, &epk, &recipient_public);
 
     var expected_tag: [32]u8 = undefined;
@@ -137,11 +147,13 @@ fn unsealV4Raw(
     if (!util.constantTimeEqual(tag, &expected_tag)) return Error.InvalidAuthenticator;
 
     var ek: [32]u8 = undefined;
+    defer util.secureZero(&ek);
     var n: [24]u8 = undefined;
+    defer util.secureZero(&n);
     deriveEkNV4(&ek, &n, &xk, &epk, &recipient_public);
 
     const out = try allocator.alloc(u8, 32);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     XChaCha20IETF.xor(out, edk, 0, ek, n);
     return out;
 }
@@ -196,6 +208,7 @@ pub fn sealV3(
 
     // Generate ephemeral key pair.
     var esk: [48]u8 = undefined;
+    defer util.secureZero(&esk);
     if (ephemeral_override) |e| {
         @memcpy(&esk, &e);
     } else {
@@ -210,16 +223,21 @@ pub fn sealV3(
 
     // Shared secret = X coordinate of recipient * esk.
     const shared_point = recipient_point.mul(esk, .big) catch return Error.InvalidKey;
-    const xk = shared_point.affineCoordinates().x.toBytes(.big);
+    var xk = shared_point.affineCoordinates().x.toBytes(.big);
+    defer util.secureZero(&xk);
 
     var ek: [32]u8 = undefined;
+    defer util.secureZero(&ek);
     var n: [16]u8 = undefined;
+    defer util.secureZero(&n);
     deriveEkNV3(&ek, &n, &xk, &epk, recipient_public_compressed);
 
     var ak: [48]u8 = undefined;
+    defer util.secureZero(&ak);
     deriveAkV3(&ak, &xk, &epk, recipient_public_compressed);
 
     var edk: [32]u8 = undefined;
+    defer util.secureZero(&edk);
     const enc = Aes256.initEnc(ek);
     std.crypto.core.modes.ctr(@TypeOf(enc), enc, &edk, ptk, n, .big);
 
@@ -232,7 +250,7 @@ pub fn sealV3(
 
     const body_len = 48 + 49 + edk.len;
     const body = try allocator.alloc(u8, body_len);
-    defer allocator.free(body);
+    defer util.secureFree(allocator, body);
     @memcpy(body[0..48], &tag);
     @memcpy(body[48..97], &epk);
     @memcpy(body[97..], &edk);
@@ -245,11 +263,13 @@ pub fn unsealV3(
     recipient_scalar: [48]u8,
     paserk: []const u8,
 ) ![]u8 {
+    if (paserk.len > util.max_paserk_string_bytes) return Error.InvalidEncoding;
     if (!std.mem.startsWith(u8, paserk, k3_header)) return Error.InvalidEncoding;
     const data = paserk[k3_header.len..];
+    if (data.len != util.encodedBase64Len(48 + 49 + 32)) return Error.InvalidEncoding;
     const body = try util.decodeBase64Alloc(allocator, data);
-    defer allocator.free(body);
-    if (body.len < 48 + 49 + 1) return Error.MessageTooShort;
+    defer util.secureFree(allocator, body);
+    if (body.len != 48 + 49 + 32) return Error.InvalidEncoding;
 
     const tag = body[0..48];
     const epk_slice = body[48..97];
@@ -264,9 +284,11 @@ pub fn unsealV3(
 
     // Shared secret.
     const shared_point = epk_point.mul(recipient_scalar, .big) catch return Error.InvalidKey;
-    const xk = shared_point.affineCoordinates().x.toBytes(.big);
+    var xk = shared_point.affineCoordinates().x.toBytes(.big);
+    defer util.secureZero(&xk);
 
     var ak: [48]u8 = undefined;
+    defer util.secureZero(&ak);
     deriveAkV3(&ak, &xk, epk_slice, &recipient_public);
 
     var expected_tag: [48]u8 = undefined;
@@ -278,11 +300,13 @@ pub fn unsealV3(
     if (!util.constantTimeEqual(tag, &expected_tag)) return Error.InvalidAuthenticator;
 
     var ek: [32]u8 = undefined;
+    defer util.secureZero(&ek);
     var n: [16]u8 = undefined;
+    defer util.secureZero(&n);
     deriveEkNV3(&ek, &n, &xk, epk_slice, &recipient_public);
 
     const out = try allocator.alloc(u8, 32);
-    errdefer allocator.free(out);
+    errdefer util.secureFree(allocator, out);
     const enc = Aes256.initEnc(ek);
     std.crypto.core.modes.ctr(@TypeOf(enc), enc, out, edk, n, .big);
     return out;

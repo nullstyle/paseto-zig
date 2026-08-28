@@ -2,6 +2,7 @@ const std = @import("std");
 const util = @import("../util.zig");
 const errors = @import("../errors.zig");
 const token_mod = @import("../token.zig");
+const claims_mod = @import("../claims.zig");
 const keys_mod = @import("../paserk/keys.zig");
 const id_mod = @import("../paserk/id.zig");
 const pie_mod = @import("../paserk/pie.zig");
@@ -37,6 +38,14 @@ pub const Local = struct {
         return k;
     }
 
+    pub fn fromPaserk(allocator: std.mem.Allocator, paserk: []const u8) !Local {
+        var decoded = try keys_mod.parse(allocator, paserk);
+        defer decoded.deinit();
+        if (decoded.version != .v3) return Error.WrongVersion;
+        if (decoded.kind != .local) return Error.WrongPurpose;
+        return try fromBytes(decoded.bytes);
+    }
+
     pub fn eql(self: Local, other: Local) bool {
         return util.constantTimeEqual(&self.key, &other.key);
     }
@@ -60,10 +69,11 @@ pub const Local = struct {
             util.randomBytes(&nonce);
         }
 
-        const keys = deriveKeys(self.key, nonce);
+        var keys = deriveKeys(self.key, nonce);
+        defer util.secureZero(std.mem.asBytes(&keys));
 
         const ciphertext = try allocator.alloc(u8, message.len);
-        defer allocator.free(ciphertext);
+        defer util.secureFree(allocator, ciphertext);
         aes256Ctr(ciphertext, message, keys.ek, keys.iv);
 
         var pae_parts: [5][]const u8 = .{
@@ -74,13 +84,13 @@ pub const Local = struct {
             opts.implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         var tag: [mac_bytes]u8 = undefined;
         HmacSha384.create(&tag, pae, &keys.ak);
 
         const raw_payload = try allocator.alloc(u8, nonce_bytes + ciphertext.len + mac_bytes);
-        defer allocator.free(raw_payload);
+        defer util.secureFree(allocator, raw_payload);
         @memcpy(raw_payload[0..nonce_bytes], &nonce);
         @memcpy(raw_payload[nonce_bytes .. nonce_bytes + ciphertext.len], ciphertext);
         @memcpy(raw_payload[nonce_bytes + ciphertext.len ..], &tag);
@@ -96,13 +106,28 @@ pub const Local = struct {
     ) ![]u8 {
         var tok = try token_mod.parse(allocator, token_str);
         defer tok.deinit();
-        return try self.decryptToken(allocator, tok, implicit_assertion);
+        return try self.decryptToken(allocator, &tok, implicit_assertion);
+    }
+
+    pub fn decryptWithFooter(
+        self: Local,
+        allocator: std.mem.Allocator,
+        token_str: []const u8,
+        implicit_assertion: []const u8,
+    ) !claims_mod.Result {
+        var tok = try token_mod.parse(allocator, token_str);
+        defer tok.deinit();
+        const plaintext = try self.decryptToken(allocator, &tok, implicit_assertion);
+        errdefer util.secureFree(allocator, plaintext);
+        const footer = try allocator.dupe(u8, tok.footer);
+        errdefer util.secureFree(allocator, footer);
+        return .{ .claims_bytes = plaintext, .footer = footer, .allocator = allocator };
     }
 
     pub fn decryptToken(
         self: Local,
         allocator: std.mem.Allocator,
-        tok: token_mod.Token,
+        tok: *const token_mod.Token,
         implicit_assertion: []const u8,
     ) ![]u8 {
         if (tok.version != .v3 or tok.purpose != .local) return Error.WrongPurpose;
@@ -113,7 +138,8 @@ pub const Local = struct {
         const ciphertext = payload[nonce_bytes .. payload.len - mac_bytes];
         const tag = payload[payload.len - mac_bytes ..];
 
-        const keys = deriveKeys(self.key, nonce.*);
+        var keys = deriveKeys(self.key, nonce.*);
+        defer util.secureZero(std.mem.asBytes(&keys));
 
         var pae_parts: [5][]const u8 = .{
             pae_header,
@@ -123,14 +149,14 @@ pub const Local = struct {
             implicit_assertion,
         };
         const pae = try util.preAuthEncodeAlloc(allocator, &pae_parts);
-        defer allocator.free(pae);
+        defer util.secureFree(allocator, pae);
 
         var expected_tag: [mac_bytes]u8 = undefined;
         HmacSha384.create(&expected_tag, pae, &keys.ak);
         if (!util.constantTimeEqual(tag, &expected_tag)) return Error.InvalidAuthenticator;
 
         const plaintext = try allocator.alloc(u8, ciphertext.len);
-        errdefer allocator.free(plaintext);
+        errdefer util.secureFree(allocator, plaintext);
         aes256Ctr(plaintext, ciphertext, keys.ek, keys.iv);
         return plaintext;
     }
@@ -199,10 +225,12 @@ fn deriveKeys(key: [key_bytes]u8, nonce: [nonce_bytes]u8) DerivedKeys {
     @memcpy(auth_info["paseto-auth-key-for-aead".len..][0..nonce_bytes], &nonce);
     const auth_info_slice = auth_info[0 .. "paseto-auth-key-for-aead".len + nonce_bytes];
 
-    const prk = Hkdf.extract(&[_]u8{}, &key);
+    var prk = Hkdf.extract(&[_]u8{}, &key);
+    defer util.secureZero(std.mem.asBytes(&prk));
 
     var out: DerivedKeys = undefined;
     var tmp: [48]u8 = undefined;
+    defer util.secureZero(&tmp);
     Hkdf.expand(&tmp, encrypt_info_slice, prk);
     @memcpy(&out.ek, tmp[0..32]);
     @memcpy(&out.iv, tmp[32..48]);
