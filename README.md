@@ -2,7 +2,9 @@
 
 A full-featured implementation of [PASETO](https://github.com/paseto-standard/paseto-spec)
 (Platform-Agnostic Security Tokens) and [PASERK](https://github.com/paseto-standard/paserk)
-(Platform-Agnostic Serialized Keys) for Zig `0.16.0+`.
+(Platform-Agnostic Serialized Keys) for Zig `0.16.0+`. The stable support
+baseline is Zig `0.16.0`; this checkout is also kept compatible with the
+current Zig development toolchain used by the maintainer.
 
 Supports PASETO `v3` (NIST Modern — AES-256-CTR, HMAC-SHA384, ECDSA P-384)
 and `v4` (Sodium Modern — XChaCha20, BLAKE2b-keyed, Ed25519), covering both
@@ -28,7 +30,7 @@ Add `paseto-zig` to a consuming project's `build.zig.zon` with `zig fetch`.
 Pin releases by tag, or pin unreleased builds by full commit SHA:
 
 ```sh
-zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/refs/tags/v0.1.0.tar.gz
+zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/refs/tags/0.3.0.tar.gz
 zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/<commit-sha>.tar.gz
 ```
 
@@ -39,7 +41,7 @@ That writes a dependency entry like this:
 ```zig
 .dependencies = .{
     .paseto = .{
-        .url = "https://github.com/nullstyle/paseto-zig/archive/refs/tags/v0.1.0.tar.gz",
+        .url = "https://github.com/nullstyle/paseto-zig/archive/refs/tags/0.3.0.tar.gz",
         .hash = "...",
     },
 },
@@ -63,6 +65,23 @@ pair with a path relative to the consuming project's build root:
 },
 ```
 
+## WebAssembly
+
+Build the freestanding PASETO v4.local module for Deno or browsers:
+
+```sh
+zig build wasm
+```
+
+The ReleaseSafe artifact is written to `zig-out/wasm/paseto.wasm`. The build
+post-processes it with mise-pinned Binaryen 130 and produces a 39,948-byte
+module. It exports only allocator lifecycle operations, v4.local `seal`/`open`,
+and PASERK `k4.lid` derivation. The host must provide every 32-byte token nonce
+from a CSPRNG; the freestanding module does not import host randomness.
+
+See [`docs/wasm.md`](docs/wasm.md) for the exact ABI, packed byte layouts,
+status codes, and memory-wiping lifecycle.
+
 ## Quick tour
 
 ### v4.local (XChaCha20 + BLAKE2b)
@@ -79,6 +98,10 @@ defer allocator.free(token);
 
 const plaintext = try key.decrypt(allocator, token, "api:v1");
 defer allocator.free(plaintext);
+
+var result = try key.decryptWithFooter(allocator, token, "api:v1");
+defer result.deinit();
+// result.claims_bytes and result.footer are allocator-owned.
 ```
 
 ### v4.public (Ed25519)
@@ -91,6 +114,9 @@ defer allocator.free(token);
 const verifier = try paseto.v4.Public.fromPublicKeyBytes(&signer.publicKeyBytes());
 const verified = try verifier.verify(allocator, token, "");
 defer allocator.free(verified);
+
+var verified_with_footer = try verifier.verifyWithFooter(allocator, token, "");
+defer verified_with_footer.deinit();
 ```
 
 ### v3.local and v3.public
@@ -120,9 +146,9 @@ const signer = try paseto.v3.Public.fromScalarBytes(parsed.bytes);
 
 `pem.parse` recognises:
 
-* `-----BEGIN EC PRIVATE KEY-----` (SEC1 ECPrivateKey for P-384 → 48-byte scalar)
-* `-----BEGIN PRIVATE KEY-----` (PKCS#8; Ed25519 → 32-byte seed, P-384 → 48-byte scalar)
-* `-----BEGIN PUBLIC KEY-----` (SubjectPublicKeyInfo; Ed25519 or P-384)
+* `-----BEGIN EC PRIVATE KEY-----` (SEC1 ECPrivateKey for P-384 → validated 48-byte scalar)
+* `-----BEGIN PRIVATE KEY-----` (PKCS#8; Ed25519 → 32-byte seed, P-384 → validated 48-byte scalar)
+* `-----BEGIN PUBLIC KEY-----` (SubjectPublicKeyInfo; validated Ed25519 or P-384)
 
 ### PASERK
 
@@ -140,6 +166,11 @@ const lid = try lid_id.toString(allocator);  // "k4.lid.…"
 defer allocator.free(lid);
 const parsed_lid = try paseto.paserk.Id.parse(lid);
 std.debug.assert(lid_id.eql(parsed_lid));
+
+// PASERK key strings can be parsed directly into high-level keys.
+const local_paserk = try key.paserkLocal(allocator);
+defer allocator.free(local_paserk);
+const parsed_key = try paseto.v4.Local.fromPaserk(allocator, local_paserk);
 
 // PIE wrap (symmetric key wrap).
 const wrapped = try key.wrapLocal(allocator, other_key, .{});  // "k4.local-wrap.pie.…"
@@ -178,17 +209,36 @@ try validator.validate(claims_json, allocator);
 
 The validator understands the six PASETO registered claims (`exp`, `nbf`,
 `iat`, `iss`, `aud`, `sub`, `jti`). Timestamps are parsed from ISO-8601
-strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`.
+strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`. Setting an
+`expected_*` field requires that claim to be present and equal to the expected
+value. The `require_*` flags are for type/presence checks when no exact expected
+value is configured.
+
+## Security defaults
+
+* Token, PASERK, PEM, and claims parsers enforce size caps before decoding or
+  allocating large attacker-controlled inputs.
+* PBKW unwrap uses a production policy by default: v4 Argon2id parameters are
+  bounded to 64-256 MiB and 2-3 ops, and v3 PBKDF2 is bounded to 1,000-10,000
+  iterations. Fuzz and vector code can opt into `paseto.paserk.pbkw.Policy.testing`.
+* Deinit paths for owned token, result, PEM, and PASERK key buffers zero memory
+  before freeing it. Callers who receive raw plaintext/key buffers and free them
+  directly should apply the same discipline when needed.
+* Deterministic `nonce`, `salt`, and `ephemeral_override` controls exist for
+  reproducible vectors and fuzzing. Reusing these values with the same key can
+  break confidentiality; production callers should leave them null.
+* See `SECURITY.md` for vulnerability reporting. This library has not had a
+  formal third-party cryptographic audit.
 
 ## Compatibility
 
 * **Zig:** `0.16.0` minimum in `build.zig.zon` and the default `mise.toml`
   toolchain. The standard tests and seed-only fuzz corpus are CI-gated on
-  that stable release. Builtin mutation fuzzing with `--fuzz` still requires a
-  revalidated development toolchain; it was last validated locally on
-  `0.17.0-dev.256+04481c76c`. Do not float CI on `zig@master` without
-  rerunning the full matrix, because nightly standard-library changes can
-  break crypto tests independently of repo changes.
+  that stable release. Unit and e2e tests are also checked against the
+  maintainer's current Zig development snapshot (`0.17.0-dev.1252+e4b325c19`
+  at the time of this update). Builtin mutation fuzzing with `--fuzz` still
+  requires a revalidated development toolchain; do not float CI on `zig@master`
+  without rerunning the full matrix.
 * **Randomness:** library functions that need entropy (key / nonce / salt
   generation) draw from `std.Io.Threaded.global_single_threaded`, which is
   backed by the host operating system's CSPRNG. Callers who need their own
@@ -205,14 +255,18 @@ zig build test
 zig build unit     # source-embedded unit tests only (fast, <1s)
 zig build vectors  # official PASETO/PASERK test vectors (≈30s — argon2id)
 zig build e2e      # end-to-end smoke tests using the public API
+zig build wasm-test # packed WASM ABI tests on the native target
+zig build wasm      # ReleaseSafe + Binaryen-optimized freestanding artifact
+cd tests/consumer && zig build  # downstream package smoke
 ```
 
 The PBKW argon2id vectors dominate wall-clock runtime; when iterating on
 unrelated changes use `zig build unit` or `zig build e2e` for fast feedback
 and only run `zig build test` before committing.
 
-GitHub Actions runs the same core checks on an Ubuntu arm64 runner for pushes
-to `main`, pull requests, and manual dispatches. To run that gate locally
+GitHub Actions runs the same core checks on Ubuntu arm64, Ubuntu latest, and
+macOS 14 for pushes to `main`, pull requests, and manual dispatches. To run
+that gate locally
 without Docker, use the mise task:
 
 ```sh
@@ -391,8 +445,8 @@ seeds and the invariants each harness encodes.
 
 This port's feature scope and test surface mirror the Ruby
 [ruby-paseto](https://github.com/bannable/paseto) library, which is vendored
-under `vendor/ruby/` for reference. See that project's README for protocol
-discussion, security considerations, and history.
+under `vendor/ruby/` for reference. Vector provenance is recorded in
+`tests/vectors/PROVENANCE.md`.
 
 ## License
 

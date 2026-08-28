@@ -19,25 +19,31 @@ concurrency:
 
 jobs:
   test:
-    name: Zig test suite (Linux arm64)
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
+    name: Zig test suite (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04-arm
+          - ubuntu-latest
+          - macos-14
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Zig
+      - name: Install Zig and Binaryen
         uses: jdx/mise-action@v3
         with:
           cache: true
-          install_args: zig
+          install_args: zig aqua:WebAssembly/binaryen
 
       - name: Show Zig version
-        run: zig version
-
-      - name: Verify package metadata
-        run: zig fetch .
+        run: |
+          zig version
+          wasm-opt --version
 
       - name: Check formatting
         run: zig fmt --check build.zig src tests
@@ -48,8 +54,18 @@ jobs:
       - name: Run end-to-end tests
         run: zig build e2e
 
+      - name: Test WASM ABI
+        run: zig build wasm-test
+
+      - name: Build ReleaseSafe WASM
+        run: zig build wasm
+
       - name: Run vector tests
         run: zig build vectors
 
       - name: Run deterministic fuzz corpus
         run: zig build fuzz-all
+
+      - name: Run downstream consumer smoke
+        working-directory: tests/consumer
+        run: zig build

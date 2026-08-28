@@ -1,0 +1,16 @@
+.{
+    .name = .paseto_consumer_smoke,
+    .version = "0.0.0",
+    .fingerprint = 0xd2951359b931b973,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .dependencies = .{
+        .paseto = .{
+            .path = "../..",
+        },
+    },
+}
