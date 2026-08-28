@@ -1,0 +1,16 @@
+# frozen_string_literal: true
+
+# Fixture-generation bundle for the cross-implementation interop tests.
+# Uses the vendored ruby-paseto reference at its pinned submodule commit,
+# with runtime-gem versions taken from that commit's Gemfile.lock so the
+# generator behaves exactly like the vendored reference's own CI.
+# Regeneration is manual and local; CI only consumes the committed JSON.
+source 'https://rubygems.org'
+
+gem 'ruby-paseto', path: '../../vendor/ruby'
+gem 'rbnacl'
+gem 'multi_json', '1.20.1'
+gem 'openssl', '4.0.1'
+gem 'sorbet-runtime', '0.6.13145'
+gem 'zeitwerk', '2.7.5'
+gem 'singleton'

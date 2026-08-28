@@ -1,0 +1,55 @@
+PATH
+  remote: ../../vendor/ruby
+  specs:
+    ruby-paseto (0.2.0)
+      multi_json (~> 1.17)
+      openssl (>= 3.3, < 5)
+      sorbet-runtime
+      zeitwerk
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    ffi (1.17.4)
+    ffi (1.17.4-aarch64-linux-gnu)
+    ffi (1.17.4-aarch64-linux-musl)
+    ffi (1.17.4-arm-linux-gnu)
+    ffi (1.17.4-arm-linux-musl)
+    ffi (1.17.4-arm64-darwin)
+    ffi (1.17.4-x86-linux-gnu)
+    ffi (1.17.4-x86-linux-musl)
+    ffi (1.17.4-x86_64-darwin)
+    ffi (1.17.4-x86_64-linux-gnu)
+    ffi (1.17.4-x86_64-linux-musl)
+    multi_json (1.20.1)
+    openssl (4.0.1)
+    rbnacl (7.1.2)
+      ffi (~> 1)
+    singleton (0.3.0)
+    sorbet-runtime (0.6.13145)
+    zeitwerk (2.7.5)
+
+PLATFORMS
+  aarch64-linux-gnu
+  aarch64-linux-musl
+  arm-linux-gnu
+  arm-linux-musl
+  arm64-darwin
+  ruby
+  x86-linux-gnu
+  x86-linux-musl
+  x86_64-darwin
+  x86_64-linux-gnu
+  x86_64-linux-musl
+
+DEPENDENCIES
+  multi_json (= 1.20.1)
+  openssl (= 4.0.1)
+  rbnacl
+  ruby-paseto!
+  singleton
+  sorbet-runtime (= 0.6.13145)
+  zeitwerk (= 2.7.5)
+
+BUNDLED WITH
+   2.6.9

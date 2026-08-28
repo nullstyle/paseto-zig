@@ -10,6 +10,8 @@
         "tests/e2e.zig",
         "tests/vectors.zig",
         "tests/vectors",
+        "tests/vectors-interop",
+        "tests/interop.zig",
         "tests/fuzz",
         "tests/wasm_abi.zig",
         "docs",

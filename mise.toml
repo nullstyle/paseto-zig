@@ -12,6 +12,7 @@ run = [
   "zig build wasm-test",
   "zig build wasm",
   "zig build vectors",
+  "zig build interop",
   "zig build fuzz-all",
   "cd tests/consumer && zig build",
 ]

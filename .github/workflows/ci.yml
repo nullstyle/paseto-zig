@@ -63,6 +63,9 @@ jobs:
       - name: Run vector tests
         run: zig build vectors
 
+      - name: Run cross-implementation interop fixtures
+        run: zig build interop
+
       - name: Run deterministic fuzz corpus
         run: zig build fuzz-all
 
