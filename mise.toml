@@ -8,6 +8,7 @@ deno = "2.9.5"
 description = "Run the same checks as GitHub CI without Docker"
 run = [
   "zig fmt --check build.zig src tests",
+  "tools/release-check.sh",
   "zig build unit",
   "zig build e2e",
   "zig build wasm-test",
@@ -26,6 +27,10 @@ run = "zig build wasm"
 [tasks.wasm-test]
 description = "Run focused packed WASM ABI tests"
 run = "zig build wasm-test"
+
+[tasks.release-check]
+description = "Verify README tag and zon version agree (and match the ref on tag builds)"
+run = "tools/release-check.sh"
 
 [tasks.wasm-smoke]
 description = "Run the Deno engine smoke test against the shipped WASM artifact"

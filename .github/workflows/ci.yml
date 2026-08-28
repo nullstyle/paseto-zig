@@ -48,6 +48,9 @@ jobs:
       - name: Check formatting
         run: zig fmt --check build.zig src tests
 
+      - name: Release hygiene (zon/README/tag agreement)
+        run: tools/release-check.sh "$GITHUB_REF_NAME"
+
       - name: Run unit tests
         run: zig build unit
 

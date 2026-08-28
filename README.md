@@ -22,7 +22,10 @@ PASERK operation:
 | `local-pw` / `secret-pw` | ✅ | ✅ |
 
 The library passes the [official PASETO and PASERK test vectors](https://github.com/paseto-standard/test-vectors)
-for every supported protocol and PASERK type.
+for every supported protocol and PASERK type, and additionally verifies
+fresh tokens produced by the vendored
+[ruby-paseto](https://github.com/bannable/paseto) reference in CI
+(`zig build interop`; see [`tests/vectors-interop/PROVENANCE.md`](tests/vectors-interop/PROVENANCE.md)).
 
 ## Installing
 
@@ -227,8 +230,12 @@ value is configured.
 * Deterministic `nonce`, `salt`, and `ephemeral_override` controls exist for
   reproducible vectors and fuzzing. Reusing these values with the same key can
   break confidentiality; production callers should leave them null.
-* See `SECURITY.md` for vulnerability reporting. This library has not had a
-  formal third-party cryptographic audit.
+* A first-party audit of every untrusted-input entry point — mapping each
+  check to its spec area, disposition, and pinning test — is maintained in
+  [`docs/security-audit.md`](docs/security-audit.md).
+* See `SECURITY.md` for vulnerability reporting and the documented PBKW
+  work-factor posture. This library has not had a formal third-party
+  cryptographic audit.
 
 ## Compatibility
 
@@ -253,15 +260,17 @@ value is configured.
 ## Testing
 
 ```sh
-# Full suite (unit + vectors + e2e).
+# Full suite (unit + vectors + interop + e2e + WASM ABI).
 zig build test
 
 # Focused entrypoints — see `zig build --help` for the full list.
 zig build unit     # source-embedded unit tests only (fast, <1s)
 zig build vectors  # official PASETO/PASERK test vectors (≈30s — argon2id)
+zig build interop  # cross-implementation fixtures from the vendored ruby-paseto
 zig build e2e      # end-to-end smoke tests using the public API
 zig build wasm-test # packed WASM ABI tests on the native target
 zig build wasm      # ReleaseSafe + Binaryen-optimized freestanding artifact
+deno run --allow-read=zig-out tests/wasm/deno_smoke.ts  # engine smoke on the artifact
 cd tests/consumer && zig build  # downstream package smoke
 ```
 

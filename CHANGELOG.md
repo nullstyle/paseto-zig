@@ -2,16 +2,68 @@
 
 ## 0.3.0
 
-- Added a mise-pinned Binaryen 130 post-processing step, reducing the
-  ReleaseSafe WASM artifact from 46,997 to 39,948 bytes while preserving the
-  exact ABI, low-pointer rejection, and memory-wiping checks.
-- Replaced broad dynamic exporting with an explicit ABI symbol allowlist and
-  exported memory.
+### Freestanding WebAssembly module
+
 - Added a ReleaseSafe freestanding WASM build for PASETO v4.local seal/open
-  and PASERK local-key IDs.
-- Added a versioned packed ABI with host-supplied nonces, authenticated footer
-  framing, bounded allocation, and full arena wiping between operations.
-- Added focused ABI tests and documented browser/Deno loading semantics.
+  and PASERK local-key IDs: a versioned packed ABI with host-supplied
+  nonces, authenticated footer framing, bounded allocation, and full arena
+  wiping between operations.
+- Added a mise-pinned Binaryen 130 post-processing step, reducing the
+  artifact from 46,997 to 39,948 bytes while preserving the exact ABI,
+  low-pointer rejection, and memory-wiping checks.
+- Replaced broad dynamic exporting with an explicit ABI symbol allowlist and
+  exported memory; stripped symbols keep clean-cache builds byte-for-byte
+  reproducible for hash-pinned consumers.
+- Added focused ABI tests (`zig build wasm-test`), the exact ABI/frame/status
+  documentation in `docs/wasm.md`, and a Deno engine smoke test
+  (`tests/wasm/deno_smoke.ts`) that proves the documented loading semantics
+  against the shipped artifact in CI, including negative paths.
+
+### Audit-driven hardening
+
+- Performed a first-party untrusted-input audit across token framing, PAE,
+  all four cipher purposes, every PASERK operation, PEM/DER, claims
+  validation, and the WASM ABI; the checklist, dispositions, and pinning
+  tests are recorded in `docs/security-audit.md`.
+- Unified all keyed-BLAKE2b use on an in-place parameter-block installation
+  (`util.setBlake2bKey`) so key material exists in exactly one wipeable
+  state per operation, and pinned it to `std.crypto`'s keyed init (RFC
+  KAT-validated) across 90 size combinations plus the official vectors.
+- Enforced the 64 KiB claims cap in `Claims.init` (previously only the
+  validator capped it) and replaced the release-inert PAE length assert
+  with a checked overflow error raised before allocation.
+- Closed test gaps: v3 footer/implicit-assertion tamper negatives, parser
+  cap boundary tests (1 MiB token, 4096-byte PASERK, 64 KiB claims/PEM),
+  PBKW wrong-password and tampered-tag negatives, PIE/PKE cross-kind and
+  cross-version header-confusion negatives, and DER long-form length edge
+  cases.
+- Documented the PBKW work-factor posture and claims comparison timing in
+  `SECURITY.md`.
+
+### Cross-implementation interop
+
+- Added fixture-based interop testing against the vendored ruby-paseto
+  reference: `tools/interop/generate.rb` produces byte-stable v4 fixtures
+  (and valid v3 fixtures) that `zig build interop` consumes — decrypting
+  and verifying fresh foreign tokens, matching PASERK strings, requiring
+  identical lid/pid/sid derivations, and feeding every foreign token into
+  each wrong version/purpose entry point as a confusion negative.
+  Provenance and regeneration steps live in
+  `tests/vectors-interop/PROVENANCE.md`; CI needs no Ruby.
+
+### Toolchain and release hygiene
+
+- Made `build.zig` compile on both Zig 0.16.0 and current 0.17 dev
+  snapshots (comptime resolve for the optimize-enum rename) and added a
+  non-gating CI canary running unit/e2e/WASM-ABI tests on a pinned dev
+  snapshot, since downstream consumers build the tarball with dev
+  toolchains.
+- Documented that the pinned stable toolchain owns `zig fmt`.
+- Added `tools/release-check.sh` (wired into CI and `mise run ci`):
+  the README fetch tag and `build.zig.zon` version must agree, and tag
+  builds must match the zon version exactly.
+- Expanded the CI matrix to Linux arm64, Linux x86_64, and macOS, with
+  WASM build, vector, interop, fuzz, and consumer smoke steps.
 
 ## 0.2.0
 
