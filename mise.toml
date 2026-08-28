@@ -2,6 +2,7 @@
 act = "latest"
 zig = "0.16.0"
 "aqua:WebAssembly/binaryen" = "130"
+deno = "2.9.5"
 
 [tasks.ci]
 description = "Run the same checks as GitHub CI without Docker"
@@ -11,6 +12,7 @@ run = [
   "zig build e2e",
   "zig build wasm-test",
   "zig build wasm",
+  "deno run --allow-read=zig-out tests/wasm/deno_smoke.ts",
   "zig build vectors",
   "zig build interop",
   "zig build fuzz-all",
@@ -24,6 +26,10 @@ run = "zig build wasm"
 [tasks.wasm-test]
 description = "Run focused packed WASM ABI tests"
 run = "zig build wasm-test"
+
+[tasks.wasm-smoke]
+description = "Run the Deno engine smoke test against the shipped WASM artifact"
+run = "deno run --allow-read=zig-out tests/wasm/deno_smoke.ts"
 
 [tasks.act-ci]
 description = "Run the GitHub Actions CI workflow locally with act"
