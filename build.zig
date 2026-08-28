@@ -1,5 +1,13 @@
 const std = @import("std");
 
+// Zig 0.17-dev renamed OptimizeMode fields (ReleaseSafe -> safe). Resolve
+// the release-safe value at comptime so one build.zig serves both the
+// stable 0.16.0 baseline and current dev snapshots.
+const release_safe: std.builtin.OptimizeMode = if (@hasField(std.builtin.OptimizeMode, "ReleaseSafe"))
+    .ReleaseSafe
+else
+    .safe;
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -7,7 +15,7 @@ pub fn build(b: *std.Build) void {
         std.builtin.OptimizeMode,
         "wasm-optimize",
         "Optimize mode for the freestanding WASM module",
-    ) orelse .ReleaseSafe;
+    ) orelse release_safe;
 
     const paseto_mod = b.addModule("paseto", .{
         .root_source_file = b.path("src/root.zig"),

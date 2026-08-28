@@ -69,3 +69,32 @@ jobs:
       - name: Run downstream consumer smoke
         working-directory: tests/consumer
         run: zig build
+
+  # Non-gating canary against one pinned Zig development snapshot. Downstream
+  # consumers build the tarball with dev toolchains, so trunk churn that breaks
+  # the dev build (e.g. std API renames) should surface here first. The pin is
+  # deliberate: bump it after re-running the full matrix. Dev-snapshot `zig
+  # fmt` output is NOT authoritative — the stable toolchain owns formatting.
+  dev-toolchain:
+    name: Zig dev snapshot canary (non-gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Zig dev snapshot
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+          install_args: "zig@0.17.0-dev.1786+75044cb04"
+
+      - name: Unit tests (dev snapshot)
+        run: mise exec zig@0.17.0-dev.1786+75044cb04 -- zig build unit
+
+      - name: End-to-end tests (dev snapshot)
+        run: mise exec zig@0.17.0-dev.1786+75044cb04 -- zig build e2e
+
+      - name: WASM ABI tests (dev snapshot)
+        run: mise exec zig@0.17.0-dev.1786+75044cb04 -- zig build wasm-test

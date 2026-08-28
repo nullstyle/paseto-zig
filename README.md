@@ -234,11 +234,16 @@ value is configured.
 
 * **Zig:** `0.16.0` minimum in `build.zig.zon` and the default `mise.toml`
   toolchain. The standard tests and seed-only fuzz corpus are CI-gated on
-  that stable release. Unit and e2e tests are also checked against the
-  maintainer's current Zig development snapshot (`0.17.0-dev.1252+e4b325c19`
-  at the time of this update). Builtin mutation fuzzing with `--fuzz` still
-  requires a revalidated development toolchain; do not float CI on `zig@master`
-  without rerunning the full matrix.
+  that stable release. Unit, e2e, and WASM ABI tests are also verified
+  against a pinned Zig development snapshot (`0.17.0-dev.1786+75044cb04` at
+  the time of this update) by a non-gating CI canary job, because downstream
+  consumers build the tarball with dev toolchains; `build.zig` carries a
+  small compat shim for the `0.17` optimize-enum rename. Formatting is owned
+  by the pinned stable toolchain: dev snapshots may rewrite builtin names
+  (e.g. `@intFromEnum` → `@backingInt`) that do not compile on `0.16.0`, so
+  never gate on dev-snapshot `zig fmt`. Builtin mutation fuzzing with
+  `--fuzz` still requires a revalidated development toolchain; do not float
+  CI on `zig@master` without rerunning the full matrix.
 * **Randomness:** library functions that need entropy (key / nonce / salt
   generation) draw from `std.Io.Threaded.global_single_threaded`, which is
   backed by the host operating system's CSPRNG. Callers who need their own
