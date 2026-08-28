@@ -418,7 +418,9 @@ fn macV4(
     ak_hash.update(pre_key);
     ak_hash.final(&ak);
 
-    var tag_hash = Blake2b(32 * 8).init(.{ .key = &ak });
+    var tag_hash = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&tag_hash));
+    util.setBlake2bKey(&tag_hash, &ak);
     tag_hash.update(header);
     tag_hash.update(".");
     tag_hash.update(salt);

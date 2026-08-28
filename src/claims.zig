@@ -15,6 +15,10 @@ pub const Claims = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, json_bytes: []const u8) !Claims {
+        // Bound the claims parser on every entry point, not only in
+        // Validator.validate: callers who skip validation still get a
+        // size-capped JSON parse instead of an unbounded one.
+        if (json_bytes.len > util.max_claims_json_bytes) return Error.InvalidClaim;
         const owned = try allocator.dupe(u8, json_bytes);
         return .{ .json = owned, .allocator = allocator };
     }

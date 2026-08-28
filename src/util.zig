@@ -110,8 +110,13 @@ pub fn preAuthEncodeAlloc(
     allocator: std.mem.Allocator,
     parts: []const []const u8,
 ) ![]u8 {
+    // The spec clears the high bit of each LE64 length; reject oversized
+    // inputs as a checked error so release builds cannot silently encode a
+    // length that overflows into the sign bit.
+    if (parts.len > std.math.maxInt(i64)) return Error.Overflow;
     var total: usize = 8;
     for (parts) |p| {
+        if (p.len > std.math.maxInt(i64)) return Error.Overflow;
         total = std.math.add(usize, total, 8) catch return Error.Overflow;
         total = std.math.add(usize, total, p.len) catch return Error.Overflow;
     }
@@ -123,9 +128,6 @@ pub fn preAuthEncodeAlloc(
     std.mem.writeInt(u64, out[idx..][0..8], @as(u64, @intCast(parts.len)), .little);
     idx += 8;
     for (parts) |p| {
-        // PASETO spec masks the high bit; in practice the length is never that
-        // large in this library. Enforce an assertion anyway.
-        std.debug.assert(p.len <= std.math.maxInt(i64));
         std.mem.writeInt(u64, out[idx..][0..8], @as(u64, @intCast(p.len)), .little);
         idx += 8;
         @memcpy(out[idx..][0..p.len], p);
@@ -174,6 +176,23 @@ pub fn secureZero(buf: []u8) void {
 pub fn secureFree(allocator: std.mem.Allocator, buf: []u8) void {
     secureZero(buf);
     allocator.free(buf);
+}
+
+/// Install a BLAKE2b key directly into a caller-owned state (RFC 7693 keyed
+/// init: `h[0] ^= key_len << 8`, key block zero-padded, `buf_len` = block
+/// size). Zig's keyed `init` returns a state containing the padded key block
+/// by value, which can leave the temporary return frame on the stack (and in
+/// exported WASM linear memory). Building the parameter block in place gives
+/// the caller exactly one state to wipe with `secureZero`.
+///
+/// The equivalence test below pins this to `std.crypto`'s keyed init, which
+/// is itself validated against the official BLAKE2 known-answer vectors.
+pub fn setBlake2bKey(hasher: anytype, key: []const u8) void {
+    std.debug.assert(key.len > 0 and key.len <= 64);
+    hasher.h[0] ^= @as(u64, key.len << 8);
+    @memset(&hasher.buf, 0);
+    @memcpy(hasher.buf[0..key.len], key);
+    hasher.buf_len = std.crypto.hash.blake2.Blake2b(8).block_length;
 }
 
 pub fn hexDecodeAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
@@ -235,4 +254,43 @@ test "constantTimeEqual" {
     try std.testing.expect(constantTimeEqual("abc", "abc"));
     try std.testing.expect(!constantTimeEqual("abc", "abd"));
     try std.testing.expect(!constantTimeEqual("abc", "abcd"));
+}
+
+test "setBlake2bKey matches std keyed init across sizes" {
+    const Blake2b = std.crypto.hash.blake2.Blake2b;
+
+    // Sweep output sizes (the library uses 32- and 56-byte digests), key
+    // lengths on both sides of the padding boundary, and message lengths
+    // spanning empty, sub-block, block-aligned, and multi-block inputs.
+    const out_bits = [_]usize{ 32 * 8, 56 * 8, 64 * 8 };
+    const key_lens = [_]usize{ 1, 16, 32, 63, 64 };
+    const msg_lens = [_]usize{ 0, 1, 127, 128, 129, 1000 };
+
+    var key: [64]u8 = undefined;
+    var msg: [1000]u8 = undefined;
+    var seed: u64 = 0x9e3779b97f4a7c15;
+    for (&key, 0..) |*b, i| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        b.* = @truncate(seed ^ i);
+    }
+    for (&msg, 0..) |*b, i| b.* = @truncate(i *% 31);
+
+    inline for (out_bits) |bits| {
+        inline for (key_lens) |klen| {
+            inline for (msg_lens) |mlen| {
+                var via_std: [64]u8 = undefined;
+                Blake2b(bits).hash(msg[0..mlen], via_std[0 .. bits / 8], .{ .key = key[0..klen] });
+
+                var h = Blake2b(bits).init(.{});
+                setBlake2bKey(&h, key[0..klen]);
+                h.update(msg[0..mlen]);
+                var via_inplace: [64]u8 = undefined;
+                h.final(via_inplace[0 .. bits / 8]);
+
+                try std.testing.expectEqualSlices(u8, via_std[0 .. bits / 8], via_inplace[0 .. bits / 8]);
+            }
+        }
+    }
 }

@@ -235,7 +235,9 @@ fn encryptPayload(
             // x = BLAKE2b-56(wrapping_key, 0x80 || nonce)
             var x: [56]u8 = undefined;
             defer util.secureZero(&x);
-            var h = Blake2b(56 * 8).init(.{ .key = wrapping_key });
+            var h = Blake2b(56 * 8).init(.{});
+            defer util.secureZero(std.mem.asBytes(&h));
+            util.setBlake2bKey(&h, wrapping_key);
             var sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
             h.update(&sep);
             h.update(&nonce);
@@ -285,13 +287,17 @@ fn macBody(
             // ak = BLAKE2b-32(wrapping_key, 0x81 || nonce)
             var ak: [32]u8 = undefined;
             defer util.secureZero(&ak);
-            var h_ak = Blake2b(32 * 8).init(.{ .key = wrapping_key });
+            var h_ak = Blake2b(32 * 8).init(.{});
+            defer util.secureZero(std.mem.asBytes(&h_ak));
+            util.setBlake2bKey(&h_ak, wrapping_key);
             var sep = [_]u8{DOMAIN_SEPARATOR_AUTH};
             h_ak.update(&sep);
             h_ak.update(&nonce);
             h_ak.final(&ak);
 
-            var h_tag = Blake2b(32 * 8).init(.{ .key = &ak });
+            var h_tag = Blake2b(32 * 8).init(.{});
+            defer util.secureZero(std.mem.asBytes(&h_tag));
+            util.setBlake2bKey(&h_tag, &ak);
             h_tag.update(header);
             h_tag.update(&nonce);
             h_tag.update(ciphertext);

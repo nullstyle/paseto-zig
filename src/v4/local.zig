@@ -112,7 +112,7 @@ pub const Local = struct {
         var tag: [mac_bytes]u8 = undefined;
         var tag_hasher = Blake2b(mac_bytes * 8).init(.{});
         defer util.secureZero(std.mem.asBytes(&tag_hasher));
-        setBlake2bKey(&tag_hasher, &keys.ak);
+        util.setBlake2bKey(&tag_hasher, &keys.ak);
         tag_hasher.update(pae);
         tag_hasher.final(&tag);
 
@@ -217,7 +217,7 @@ pub const Local = struct {
         var expected_tag: [mac_bytes]u8 = undefined;
         var tag_hasher = Blake2b(mac_bytes * 8).init(.{});
         defer util.secureZero(std.mem.asBytes(&tag_hasher));
-        setBlake2bKey(&tag_hasher, &keys.ak);
+        util.setBlake2bKey(&tag_hasher, &keys.ak);
         tag_hasher.update(pae);
         tag_hasher.final(&expected_tag);
 
@@ -295,7 +295,7 @@ fn deriveKeys(key: *const [key_bytes]u8, nonce: *const [nonce_bytes]u8) DerivedK
     // tmp = BLAKE2b-56(key=key, data="paseto-encryption-key"||nonce)
     var h = Blake2b(56 * 8).init(.{});
     defer util.secureZero(std.mem.asBytes(&h));
-    setBlake2bKey(&h, key);
+    util.setBlake2bKey(&h, key);
     h.update("paseto-encryption-key");
     h.update(nonce);
     h.final(&tmp);
@@ -306,24 +306,12 @@ fn deriveKeys(key: *const [key_bytes]u8, nonce: *const [nonce_bytes]u8) DerivedK
     // ak = BLAKE2b-32(key=key, data="paseto-auth-key-for-aead"||nonce)
     var h2 = Blake2b(32 * 8).init(.{});
     defer util.secureZero(std.mem.asBytes(&h2));
-    setBlake2bKey(&h2, key);
+    util.setBlake2bKey(&h2, key);
     h2.update("paseto-auth-key-for-aead");
     h2.update(nonce);
     h2.final(&out.ak);
 
     return out;
-}
-
-/// Install a BLAKE2b key directly into a caller-owned state. Zig 0.16's keyed
-/// `init` returns a state containing the padded key block by value, which can
-/// leave the temporary return frame in exported WASM stack memory. Building
-/// the same parameter block in place gives the caller one state to wipe.
-inline fn setBlake2bKey(hasher: anytype, key: []const u8) void {
-    std.debug.assert(key.len > 0 and key.len <= 64);
-    hasher.h[0] ^= @as(u64, key.len << 8);
-    @memset(&hasher.buf, 0);
-    @memcpy(hasher.buf[0..key.len], key);
-    hasher.buf_len = Blake2b(8).block_length;
 }
 
 test "v4.local encrypt decrypt round trip" {

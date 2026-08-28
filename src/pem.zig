@@ -593,3 +593,25 @@ test "parse v3 test vector public key PEM" {
     _ = try std.fmt.hexToBytes(&expected, expected_hex);
     try std.testing.expectEqualSlices(u8, &expected, parsed.bytes);
 }
+
+test "DER walker rejects malformed long-form lengths" {
+    // Indefinite length (n == 0) is forbidden in DER.
+    try std.testing.expectError(Error.InvalidEncoding, readAnyTag(&.{ 0x02, 0x80, 0x01 }));
+    // Long-form length count above 4 bytes cannot fit a usize safely.
+    try std.testing.expectError(Error.InvalidEncoding, readAnyTag(&.{ 0x02, 0x85, 1, 2, 3, 4, 5, 0x01 }));
+    // Long-form length bytes truncated mid-encoding.
+    try std.testing.expectError(Error.InvalidEncoding, readAnyTag(&.{ 0x02, 0x82, 0x01 }));
+    // Declared value longer than the remaining input.
+    try std.testing.expectError(Error.InvalidEncoding, readAnyTag(&.{ 0x02, 0x05, 0x01 }));
+    try std.testing.expectError(Error.InvalidEncoding, readAnyTag(&.{ 0x02, 0x82, 0x01, 0x00, 0x01 }));
+    // A 4-byte length saturates near u32 max: on 64-bit this still trips the
+    // bounds check (the usize Overflow branch guards 32-bit targets).
+    try std.testing.expectError(Error.InvalidEncoding, readAnyTag(&.{ 0x02, 0x84, 0xff, 0xff, 0xff, 0xff, 0xff }));
+
+    // A well-formed minimal long-form length (n == 1) parses fine and the
+    // walker reports the exact value/rest split.
+    const tv = try readAnyTag(&.{ 0x04, 0x81, 0x03, 'a', 'b', 'c', 'Z' });
+    try std.testing.expectEqual(@as(u8, 0x04), tv.tag);
+    try std.testing.expectEqualStrings("abc", tv.value);
+    try std.testing.expectEqualStrings("Z", tv.rest);
+}

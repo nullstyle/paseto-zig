@@ -71,7 +71,9 @@ pub fn sealV4(
 
     // tag = BLAKE2b(header || epk || edk, key=ak, 32)
     var tag: [32]u8 = undefined;
-    var h = Blake2b(32 * 8).init(.{ .key = &ak });
+    var h = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
+    util.setBlake2bKey(&h, &ak);
     h.update(k4_header);
     h.update(&epk);
     h.update(edk);
@@ -139,7 +141,9 @@ fn unsealV4Raw(
     deriveAkV4(&ak, &xk, &epk, &recipient_public);
 
     var expected_tag: [32]u8 = undefined;
-    var h = Blake2b(32 * 8).init(.{ .key = &ak });
+    var h = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
+    util.setBlake2bKey(&h, &ak);
     h.update(k4_header);
     h.update(&epk);
     h.update(edk);

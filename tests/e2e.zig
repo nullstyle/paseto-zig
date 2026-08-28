@@ -333,3 +333,228 @@ test "key round trip via PEM (v4.public seed)" {
     defer allocator.free(check);
     try std.testing.expectEqualStrings("abc", check);
 }
+
+// ----- v3 tamper coverage (v4 equivalents above) --------------------------
+
+test "v3.local rejects wrong implicit assertion" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v3.Local.generate();
+    const tok = try key.encrypt(allocator, "hello", .{ .implicit_assertion = "a" });
+    defer allocator.free(tok);
+    try std.testing.expectError(paseto.Error.InvalidAuthenticator, key.decrypt(allocator, tok, "b"));
+}
+
+test "v3.local rejects footer tampering" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v3.Local.generate();
+    const tok = try key.encrypt(allocator, "hello", .{ .footer = "footer-v3" });
+    defer allocator.free(tok);
+
+    var parsed = try paseto.token.parse(allocator, tok);
+    defer parsed.deinit();
+    parsed.footer[0] ^= 0x01;
+    const tampered = try paseto.token.serialize(allocator, parsed.version, parsed.purpose, parsed.payload, parsed.footer);
+    defer allocator.free(tampered);
+
+    try std.testing.expectError(paseto.Error.InvalidAuthenticator, key.decrypt(allocator, tampered, ""));
+}
+
+test "v3.public rejects wrong implicit assertion" {
+    const allocator = std.testing.allocator;
+    const signer = try paseto.v3.Public.generate();
+    const tok = try signer.sign(allocator, "hello", .{ .implicit_assertion = "a" });
+    defer allocator.free(tok);
+    try std.testing.expectError(paseto.Error.InvalidSignature, signer.verify(allocator, tok, "b"));
+}
+
+test "v3.public rejects signature tampering" {
+    const allocator = std.testing.allocator;
+    const signer = try paseto.v3.Public.generate();
+    const tok = try signer.sign(allocator, "msg", .{});
+    defer allocator.free(tok);
+
+    var parsed = try paseto.token.parse(allocator, tok);
+    defer parsed.deinit();
+    parsed.payload[parsed.payload.len - 1] ^= 0x01;
+    const tampered = try paseto.token.serialize(allocator, parsed.version, parsed.purpose, parsed.payload, parsed.footer);
+    defer allocator.free(tampered);
+
+    try std.testing.expectError(paseto.Error.InvalidSignature, signer.verify(allocator, tampered, ""));
+}
+
+// ----- parser size-cap boundaries ------------------------------------------
+
+test "token parser enforces the 1 MiB cap at the boundary" {
+    const allocator = std.testing.allocator;
+
+    // Build a structurally valid token whose total length is exactly the
+    // cap: header + base64url payload + '.' + base64url footer filler. The
+    // footer filler length is fixed by the cap, so pick a payload size whose
+    // encoding leaves a decodable footer length (mod 4 != 1).
+    const candidates = [_]usize{ 65, 66, 67 };
+    var chosen: ?[]u8 = null;
+    defer if (chosen) |c| allocator.free(c);
+    for (candidates) |payload_len| {
+        const payload = try allocator.alloc(u8, payload_len);
+        defer allocator.free(payload);
+        @memset(payload, 0x41);
+        const pb64 = try paseto.util.encodeBase64Alloc(allocator, payload);
+        defer allocator.free(pb64);
+        const footer_len = paseto.util.max_token_string_bytes - "v4.local.".len - pb64.len - 1;
+        if (footer_len % 4 == 1) continue;
+
+        const at_cap = try allocator.alloc(u8, paseto.util.max_token_string_bytes);
+        @memcpy(at_cap[0.."v4.local.".len], "v4.local.");
+        @memcpy(at_cap["v4.local.".len .. "v4.local.".len + pb64.len], pb64);
+        at_cap["v4.local.".len + pb64.len] = '.';
+        @memset(at_cap["v4.local.".len + pb64.len + 1 ..], 'A');
+        chosen = at_cap;
+        break;
+    }
+    const at_cap = chosen orelse return error.NoValidPayloadSize;
+
+    {
+        var parsed = try paseto.token.parse(allocator, at_cap);
+        defer parsed.deinit();
+        try std.testing.expect(parsed.version == .v4);
+        try std.testing.expect(parsed.purpose == .local);
+    }
+
+    const over_cap = try allocator.alloc(u8, at_cap.len + 1);
+    defer allocator.free(over_cap);
+    @memcpy(over_cap[0..at_cap.len], at_cap);
+    over_cap[over_cap.len - 1] = 'A';
+    try std.testing.expectError(paseto.Error.InvalidToken, paseto.token.parse(allocator, over_cap));
+}
+
+test "paserk parser enforces the 4096-byte cap at the boundary" {
+    const allocator = std.testing.allocator;
+    const cap = paseto.util.max_paserk_string_bytes;
+
+    const at_cap = try allocator.alloc(u8, cap);
+    defer allocator.free(at_cap);
+    @memcpy(at_cap[0.."k4.local.".len], "k4.local.");
+    @memset(at_cap["k4.local.".len..], 'A');
+    // At the cap the parser proceeds past the size check and rejects the
+    // (wrong-length) key body instead.
+    try std.testing.expectError(paseto.Error.InvalidKey, paseto.paserk.keys.parse(allocator, at_cap));
+
+    const over_cap = try allocator.alloc(u8, cap + 1);
+    defer allocator.free(over_cap);
+    @memcpy(over_cap[0..at_cap.len], at_cap);
+    over_cap[over_cap.len - 1] = 'A';
+    try std.testing.expectError(paseto.Error.InvalidEncoding, paseto.paserk.keys.parse(allocator, over_cap));
+}
+
+test "Claims.init enforces the 64 KiB cap at the boundary" {
+    const allocator = std.testing.allocator;
+    const cap = paseto.util.max_claims_json_bytes;
+
+    const json = try allocator.alloc(u8, cap);
+    defer allocator.free(json);
+    @memcpy(json[0..6], "{\"a\":\"");
+    @memset(json[5 .. cap - 2], 'x');
+    @memcpy(json[cap - 2 ..], "\"}");
+    {
+        var claims = try paseto.Claims.init(allocator, json);
+        defer claims.deinit();
+    }
+
+    const over = try allocator.alloc(u8, cap + 1);
+    defer allocator.free(over);
+    @memcpy(over[0..json.len], json);
+    over[over.len - 1] = ' ';
+    try std.testing.expectError(paseto.Error.InvalidClaim, paseto.Claims.init(allocator, over));
+}
+
+test "pem parser enforces the 64 KiB cap" {
+    const allocator = std.testing.allocator;
+    const big = try allocator.alloc(u8, paseto.util.max_pem_bytes + 1);
+    defer allocator.free(big);
+    @memcpy(big[0.."-----BEGIN PRIVATE KEY-----".len], "-----BEGIN PRIVATE KEY-----");
+    @memset(big["-----BEGIN PRIVATE KEY-----".len .. big.len - "-END-----".len], 'A');
+    @memcpy(big[big.len - "-----END PRIVATE KEY-----".len ..], "-----END PRIVATE KEY-----");
+    try std.testing.expectError(paseto.Error.InvalidEncoding, paseto.pem.parse(allocator, big));
+}
+
+// ----- PBKW negatives -------------------------------------------------------
+
+test "PBKW unwrap rejects wrong password and tampered tag" {
+    const allocator = std.testing.allocator;
+    const key = paseto.v4.Local.generate();
+
+    // Testing-policy Argon2id params keep the e2e suite fast (std requires
+    // at least 8 KiB); the wrap/unwrap logic under test is policy-independent.
+    const wrapped = try key.wrapWithPassword(allocator, "correct horse", .{
+        .params = .{ .memlimit_bytes = 16 * 1024, .opslimit = 1 },
+        .policy = .testing,
+    });
+    defer allocator.free(wrapped);
+    try std.testing.expect(std.mem.startsWith(u8, wrapped, "k4.local-pw."));
+
+    // Wrong password derives a different Ke/Ki and must fail the tag.
+    try std.testing.expectError(
+        paseto.Error.InvalidAuthenticator,
+        paseto.paserk.pbkw.unwrapWithPolicy(allocator, "wrong horse", wrapped, .testing),
+    );
+
+    // Corrupt the final body byte (inside the MAC/tag region) while keeping
+    // the base64 alphabet valid.
+    const tampered = try allocator.dupe(u8, wrapped);
+    defer allocator.free(tampered);
+    const last = tampered[tampered.len - 1];
+    tampered[tampered.len - 1] = if (last == 'A') 'B' else 'A';
+    try std.testing.expectError(
+        paseto.Error.InvalidAuthenticator,
+        paseto.paserk.pbkw.unwrapWithPolicy(allocator, "correct horse", tampered, .testing),
+    );
+}
+
+// ----- PIE / PKE header-confusion negatives ---------------------------------
+
+test "PIE unwrap rejects cross-kind header confusion" {
+    const allocator = std.testing.allocator;
+    const wrapping = paseto.v4.Local.generate();
+    const victim = paseto.v4.Local.generate();
+
+    const wrapped = try wrapping.wrapLocal(allocator, victim, .{});
+    defer allocator.free(wrapped);
+
+    // v4 secret-wrap and local-wrap wrap differently sized key material
+    // (Ed25519 seeds carry extra framing), so the exact-length check must
+    // fire before any decoding or MAC work.
+    const body = wrapped["k4.local-wrap.pie.".len..];
+    const confused = try std.mem.concat(allocator, u8, &.{ "k4.secret-wrap.pie.", body });
+    defer allocator.free(confused);
+    try std.testing.expectError(paseto.Error.InvalidEncoding, wrapping.unwrap(allocator, confused));
+}
+
+test "PIE unwrap rejects cross-version header confusion" {
+    const allocator = std.testing.allocator;
+    const wrapping = paseto.v4.Local.generate();
+    const victim = paseto.v4.Local.generate();
+
+    const wrapped = try wrapping.wrapLocal(allocator, victim, .{});
+    defer allocator.free(wrapped);
+
+    // v3 PIE bodies (48-byte tag) have a different length than v4 (32-byte
+    // tag), so the length check must fire before any decoding.
+    const body = wrapped["k4.local-wrap.pie.".len..];
+    const confused = try std.mem.concat(allocator, u8, &.{ "k3.local-wrap.pie.", body });
+    defer allocator.free(confused);
+    try std.testing.expectError(paseto.Error.InvalidEncoding, wrapping.unwrap(allocator, confused));
+}
+
+test "PKE unseal rejects cross-version header confusion" {
+    const allocator = std.testing.allocator;
+    const recipient = paseto.v4.Public.generate();
+    const secret: [32]u8 = @splat(0x5a);
+
+    const sealed = try recipient.seal(allocator, &secret, null);
+    defer allocator.free(sealed);
+
+    const body = sealed["k4.seal.".len..];
+    const confused = try std.mem.concat(allocator, u8, &.{ "k3.seal.", body });
+    defer allocator.free(confused);
+    try std.testing.expectError(paseto.Error.InvalidEncoding, recipient.unseal(allocator, confused));
+}
