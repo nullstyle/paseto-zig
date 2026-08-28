@@ -1,6 +1,7 @@
 [tools]
 act = "latest"
 zig = "0.16.0"
+"aqua:WebAssembly/binaryen" = "130"
 
 [tasks.ci]
 description = "Run the same checks as GitHub CI without Docker"
@@ -12,6 +13,14 @@ run = [
   "zig build vectors",
   "zig build fuzz-all",
 ]
+
+[tasks.wasm]
+description = "Build the ReleaseSafe freestanding WASM module"
+run = "zig build wasm"
+
+[tasks.wasm-test]
+description = "Run focused packed WASM ABI tests"
+run = "zig build wasm-test"
 
 [tasks.act-ci]
 description = "Run the GitHub Actions CI workflow locally with act"

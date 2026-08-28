@@ -3,6 +3,11 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const wasm_optimize = b.option(
+        std.builtin.OptimizeMode,
+        "wasm-optimize",
+        "Optimize mode for the freestanding WASM module",
+    ) orelse .ReleaseSafe;
 
     const paseto_mod = b.addModule("paseto", .{
         .root_source_file = b.path("src/root.zig"),
@@ -17,7 +22,59 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
-    // Build all three test binaries once so each step reuses the same
+    const wasm_mod = b.createModule(.{
+        .root_source_file = b.path("src/wasm.zig"),
+        .target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+        }),
+        .optimize = wasm_optimize,
+        // Release artifacts are hash-pinned by the Deno package. Stripping
+        // debug/custom symbol data keeps clean-cache builds byte-for-byte
+        // reproducible across invocations of the same Zig toolchain.
+        .strip = true,
+    });
+    wasm_mod.export_symbol_names = &.{
+        "version",
+        "allocate",
+        "free",
+        "resetAllocator",
+        "seal",
+        "open",
+        "localKeyId",
+        "localKeyIdLen",
+        "openResultHeaderLen",
+    };
+    const wasm = b.addExecutable(.{
+        .name = "paseto",
+        .root_module = wasm_mod,
+    });
+    wasm.entry = .disabled;
+    wasm.export_memory = true;
+
+    // Bulk memory is emitted by Zig but stripped artifacts do not retain the
+    // target-features section Binaryen would otherwise use for validation.
+    // Keep ReleaseSafe checks and use only semantics-preserving size passes.
+    const wasm_opt = b.addSystemCommand(&.{
+        "wasm-opt",
+        "--enable-bulk-memory",
+        "-Oz",
+        "--low-memory-unused",
+        "--optimize-instructions",
+        "--converge",
+    });
+    wasm_opt.addFileArg(wasm.getEmittedBin());
+    wasm_opt.addArg("-o");
+    const optimized_wasm = wasm_opt.addOutputFileArg("paseto.wasm");
+    const install_wasm = b.addInstallFileWithDir(
+        optimized_wasm,
+        .{ .custom = "wasm" },
+        "paseto.wasm",
+    );
+    const wasm_step = b.step("wasm", "Build the freestanding PASETO v4.local WASM module");
+    wasm_step.dependOn(&install_wasm.step);
+
+    // Build all four test binaries once so each step reuses the same
     // compiled test artifact.
     const unit_tests = b.addTest(.{ .root_module = paseto_mod });
     const run_unit_tests = b.addRunArtifact(unit_tests);
@@ -40,6 +97,20 @@ pub fn build(b: *std.Build) void {
     const e2e_tests = b.addTest(.{ .root_module = e2e_mod });
     const run_e2e_tests = b.addRunArtifact(e2e_tests);
 
+    const wasm_abi_mod = b.createModule(.{
+        .root_source_file = b.path("src/wasm.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const wasm_abi_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/wasm_abi.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wasm_abi_test_mod.addImport("paseto_wasm", wasm_abi_mod);
+    const wasm_abi_tests = b.addTest(.{ .root_module = wasm_abi_test_mod });
+    const run_wasm_abi_tests = b.addRunArtifact(wasm_abi_tests);
+
     // `zig build unit` — source-embedded unit tests only (fast).
     const unit_step = b.step("unit", "Run source-embedded unit tests (fast)");
     unit_step.dependOn(&run_unit_tests.step);
@@ -52,11 +123,16 @@ pub fn build(b: *std.Build) void {
     const e2e_step = b.step("e2e", "Run end-to-end smoke tests");
     e2e_step.dependOn(&run_e2e_tests.step);
 
-    // `zig build test` — the full suite (unit + vectors + e2e).
-    const test_step = b.step("test", "Run unit + vectors + e2e tests");
+    // `zig build wasm-test` -- native tests for the packed WASM ABI frames.
+    const wasm_test_step = b.step("wasm-test", "Run focused PASETO WASM ABI tests");
+    wasm_test_step.dependOn(&run_wasm_abi_tests.step);
+
+    // `zig build test` — the full suite (unit + vectors + e2e + WASM ABI).
+    const test_step = b.step("test", "Run unit + vectors + e2e + WASM ABI tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_vectors_tests.step);
     test_step.dependOn(&run_e2e_tests.step);
+    test_step.dependOn(&run_wasm_abi_tests.step);
 
     // -- Fuzz suite ------------------------------------------------------
     //
