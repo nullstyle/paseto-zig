@@ -95,7 +95,12 @@ release-hygiene check that the tag, zon version, and README pin agree.
   `deinit`/`secureFree` helpers; the README states this discipline).
 - Caller-side concerns: key storage, rotation logistics, replay caching,
   rate limiting of PBKW attempts, transport security.
-- `v2` purposes and the `code` purpose family — not implemented.
+- `v1`/`v2` protocol versions — not implemented. (The specification's
+  registered purposes are `local` and `public` only; this library implements
+  both for v3/v4, plus every registered PASERK operation. Earlier drafts of
+  this document claimed a `code` purpose family existed unimplemented; no
+  such purpose appears in the PASETO specification, the IETF draft, or any
+  reference implementation, and the claim is retracted.)
 
 ## Verification posture
 
