@@ -275,6 +275,7 @@ fn macBody(
             @memcpy(&ak, ak_full[0..32]);
 
             var mac = HmacSha384.init(&ak);
+            defer util.secureZero(std.mem.asBytes(&mac));
             mac.update(header);
             mac.update(&nonce);
             mac.update(ciphertext);

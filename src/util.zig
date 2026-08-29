@@ -9,6 +9,7 @@ pub const max_token_string_bytes = 1024 * 1024;
 pub const max_claims_json_bytes = 64 * 1024;
 pub const max_pem_bytes = 64 * 1024;
 pub const max_paserk_string_bytes = 4096;
+pub const max_hex_string_bytes = 2 * 1024 * 1024;
 
 pub fn encodedBase64Len(raw_len: usize) usize {
     return b64.Encoder.calcSize(raw_len);
@@ -196,6 +197,9 @@ pub fn setBlake2bKey(hasher: anytype, key: []const u8) void {
 }
 
 pub fn hexDecodeAlloc(allocator: std.mem.Allocator, hex: []const u8) ![]u8 {
+    // Bound the allocation even though no src/ caller handles untrusted hex
+    // today, so the helper cannot become an uncapped entry point by accident.
+    if (hex.len > max_hex_string_bytes) return Error.InvalidEncoding;
     if (hex.len % 2 != 0) return Error.InvalidEncoding;
     const out = try allocator.alloc(u8, hex.len / 2);
     errdefer secureFree(allocator, out);

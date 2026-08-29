@@ -23,6 +23,12 @@ const pae_header = "v4.local.";
 pub const Local = struct {
     key: [key_bytes]u8,
 
+    /// Zero the key material in place. Use when a key value is discarded
+    /// without an owning deinit path.
+    pub fn wipe(self: *Local) void {
+        util.secureZero(&self.key);
+    }
+
     pub fn fromBytes(bytes: []const u8) !Local {
         if (bytes.len != key_bytes) return Error.InvalidKey;
         var k: Local = .{ .key = undefined };

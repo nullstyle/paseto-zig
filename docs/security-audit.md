@@ -140,7 +140,36 @@ pointer, length, and nonce).
   a host that repeats nonces with the same key breaks confidentiality
   (documented in `docs/wasm.md`).
 
-## 13. Verification index
+## 13. Independent fresh-eyes review
+
+After the first-party audit, three reviewers who had never seen the
+repository examined it in isolation (spec conformance against the
+authoritative PASETO/PASERK texts with independent re-implementation of the
+constructions; cryptographic misuse; untrusted-input memory safety). Every
+construction checked — PAE, all four purposes, PASERK serialization and IDs,
+PIE, PKE, PBKW wire formats — was confirmed to match the spec and the
+official vectors, with authenticate-before-decrypt and constant-time
+discipline verified on every path. Dispositions of their findings:
+
+| Finding | Disposition |
+| --- | --- |
+| v3 `deriveKeys`/`aes256Ctr` copied the master key and subkeys by value into extra stack frames (v4 already used pointer receivers) | fixed — pointer receivers, matching v4's wipe discipline |
+| v3 `Public.fromScalarBytes` left its local scalar copy unwiped | fixed — `defer secureZero` |
+| HMAC/SHA384 states absorbing key material in PIE/PKE/PBKW were not wiped (inconsistent with the BLAKE2b treatment) | fixed — every state now defer-wiped |
+| PKE `unsealV4FromSecretKey` copied the seed and secret key without wiping | fixed — both copies wiped |
+| No zeroize API on the key types, forcing manual wiping on every caller | fixed — `wipe()` added to v3/v4 `Local` and `Public` |
+| WASM `runExport` lacked the `heapFitsU32Pointers` guard its `allocate` path enforces before writing u32 descriptors | fixed — guard added |
+| `Claims.parsed` leaked std JSON errors (e.g. duplicate-key `error.DuplicateField`) outside the library error set | fixed — mapped to `InvalidJson` |
+| `util.hexDecodeAlloc` had no size cap (currently unreachable from untrusted input) | fixed — capped at 2 MiB of hex input |
+| Argon2 working memory is freed un-wiped inside Zig std (no wiping KDF variant exists) | documented — std limitation; not applicable in the WASM arena, which wipes wholesale |
+| PIE v3 `Ak` is truncated to 32 bytes while the paserk prose says full 48 | documented — the spec's own prose and its normative vectors disagree; the official vectors and the ruby reference both verify only with the truncated form, and this implementation sides with the vectors (the interoperable choice) |
+| PBKW production policy rejects some spec-conformant inputs (v3 default 100,000 iterations; v4 presets outside 64–256 MiB / opslimit 2–3) | documented — deliberate receiver-side anti-DoS bound; callers needing wider acceptance pass a custom `Policy` to `unwrapWithPolicy` |
+| Deterministic nonce/salt/ephemeral overrides are public API rather than test-gated | documented — required by the vector suite, the fuzz harnesses, and the WASM host-nonce contract; misuse warnings in README and `SECURITY.md` |
+| Key material validation is stricter than spec (seed/point/scalar semantics, not just lengths) | documented — intentional; only rejects non-canonical keys |
+| PAE rejects lengths ≥ 2^63 instead of masking the high bit per the spec pseudocode | documented — unreachable by any interoperable input; erroring is the safer reading |
+| Vendored `v3.json` 3-S-1/3-S-3 signatures differ from current upstream master (upstream re-signed with randomized nonces; same keys and messages) | documented in `tests/vectors/PROVENANCE.md` |
+
+## 14. Verification index
 
 Every row above maps to at least one of: official vector files under
 `tests/vectors/` (17 files: v3, v4, and 15 PASERK operations), the e2e

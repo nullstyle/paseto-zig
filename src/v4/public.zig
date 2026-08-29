@@ -25,6 +25,14 @@ pub const Public = struct {
     public_key: [public_bytes]u8,
     keypair: ?Ed25519.KeyPair,
 
+    /// Zero any secret key material in place (the private seed inside the
+    /// keypair; the public key needs no wiping). Use when a key value is
+    /// discarded without an owning deinit path.
+    pub fn wipe(self: *Public) void {
+        if (self.keypair) |*kp| util.secureZero(std.mem.asBytes(kp));
+        self.keypair = null;
+    }
+
     pub fn fromPublicKeyBytes(bytes: []const u8) !Public {
         if (bytes.len != public_bytes) return Error.InvalidKey;
         var pk: [public_bytes]u8 = undefined;

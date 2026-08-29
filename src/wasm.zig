@@ -159,6 +159,10 @@ fn runExport(
     out_ptr: u32,
     comptime invoke: fn (std.mem.Allocator, []const u8) Invocation,
 ) i32 {
+    // The result descriptor carries u32 pointers; refuse the call if the
+    // arena does not fit below 4 GiB (possible only on 64-bit native test
+    // builds, but guard uniformly rather than rely on the target).
+    if (!heapFitsU32Pointers()) return @intFromEnum(Status.invalid_input);
     validateOutputDescriptor(out_ptr) catch return @intFromEnum(Status.invalid_input);
     const input = inputSlice(input_ptr, input_len) catch return @intFromEnum(Status.invalid_input);
     var invocation = invoke(arenaAllocator(), input);

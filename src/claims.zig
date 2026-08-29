@@ -36,7 +36,12 @@ pub const Claims = struct {
         // Struct literals can bypass init's cap, so bound the parse here too:
         // this is the last untrusted-JSON entry point on the Claims type.
         if (self.json.len > util.max_claims_json_bytes) return Error.InvalidClaim;
-        return try std.json.parseFromSlice(std.json.Value, self.allocator, self.json, .{});
+        return std.json.parseFromSlice(std.json.Value, self.allocator, self.json, .{}) catch |err| switch (err) {
+            // Keep the library's error set closed: malformed JSON (including
+            // duplicate keys, which std rejects) maps to InvalidJson.
+            error.OutOfMemory => Error.OutOfMemory,
+            else => Error.InvalidJson,
+        };
     }
 };
 

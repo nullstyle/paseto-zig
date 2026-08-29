@@ -106,8 +106,11 @@ pub fn unsealV4FromSecretKey(
     recipient_ed_secret: [64]u8,
     paserk: []const u8,
 ) ![]u8 {
-    const sk = Ed25519.SecretKey.fromBytes(recipient_ed_secret) catch return Error.InvalidKey;
-    const seed: [32]u8 = sk.seed();
+    var secret = recipient_ed_secret;
+    defer util.secureZero(&secret);
+    const sk = Ed25519.SecretKey.fromBytes(secret) catch return Error.InvalidKey;
+    var seed: [32]u8 = sk.seed();
+    defer util.secureZero(&seed);
     return try unsealV4(allocator, seed, paserk);
 }
 
@@ -171,6 +174,7 @@ fn deriveEkNV4(
 ) void {
     std.debug.assert(ek_out.len == 32 and n_out.len == 24);
     var h = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
     const sep_e = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
     h.update(&sep_e);
     h.update(k4_header);
@@ -180,6 +184,7 @@ fn deriveEkNV4(
     h.final(ek_out[0..32]);
 
     var n_hash = Blake2b(24 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&n_hash));
     n_hash.update(epk);
     n_hash.update(pk);
     n_hash.final(n_out[0..24]);
@@ -188,6 +193,7 @@ fn deriveEkNV4(
 fn deriveAkV4(out: []u8, xk: []const u8, epk: []const u8, pk: []const u8) void {
     std.debug.assert(out.len == 32);
     var h = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
     const sep = [_]u8{DOMAIN_SEPARATOR_AUTH};
     h.update(&sep);
     h.update(k4_header);
@@ -247,6 +253,7 @@ pub fn sealV3(
 
     var tag: [48]u8 = undefined;
     var mac = HmacSha384.init(&ak);
+    defer util.secureZero(std.mem.asBytes(&mac));
     mac.update(k3_header);
     mac.update(&epk);
     mac.update(&edk);
@@ -297,6 +304,7 @@ pub fn unsealV3(
 
     var expected_tag: [48]u8 = undefined;
     var mac = HmacSha384.init(&ak);
+    defer util.secureZero(std.mem.asBytes(&mac));
     mac.update(k3_header);
     mac.update(epk_slice);
     mac.update(edk);
@@ -325,6 +333,7 @@ fn deriveEkNV3(
 ) void {
     std.debug.assert(ek_out.len == 32 and n_out.len == 16);
     var h = Sha384.init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
     const sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
     h.update(&sep);
     h.update(k3_header);
@@ -340,6 +349,7 @@ fn deriveEkNV3(
 fn deriveAkV3(out: []u8, xk: []const u8, epk: []const u8, pk: []const u8) void {
     std.debug.assert(out.len == 48);
     var h = Sha384.init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
     const sep = [_]u8{DOMAIN_SEPARATOR_AUTH};
     h.update(&sep);
     h.update(k3_header);

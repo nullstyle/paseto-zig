@@ -377,6 +377,7 @@ fn encryptV4(pre_key: []const u8, nonce: [24]u8, src: []const u8, dst: []u8) !vo
     var ek: [32]u8 = undefined;
     defer util.secureZero(&ek);
     var h = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
     var sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
     h.update(&sep);
     h.update(pre_key);
@@ -389,6 +390,7 @@ fn encryptV3(pre_key: []const u8, nonce: [16]u8, src: []const u8, dst: []u8) !vo
     var ek_full: [48]u8 = undefined;
     defer util.secureZero(&ek_full);
     var h = Sha384.init(.{});
+    defer util.secureZero(std.mem.asBytes(&h));
     var sep = [_]u8{DOMAIN_SEPARATOR_ENCRYPT};
     h.update(&sep);
     h.update(pre_key);
@@ -413,6 +415,7 @@ fn macV4(
     var ak: [32]u8 = undefined;
     defer util.secureZero(&ak);
     var ak_hash = Blake2b(32 * 8).init(.{});
+    defer util.secureZero(std.mem.asBytes(&ak_hash));
     var sep_a = [_]u8{DOMAIN_SEPARATOR_AUTH};
     ak_hash.update(&sep_a);
     ak_hash.update(pre_key);
@@ -448,12 +451,14 @@ fn macV3(
     var ak: [48]u8 = undefined;
     defer util.secureZero(&ak);
     var ak_hash = Sha384.init(.{});
+    defer util.secureZero(std.mem.asBytes(&ak_hash));
     var sep_a = [_]u8{DOMAIN_SEPARATOR_AUTH};
     ak_hash.update(&sep_a);
     ak_hash.update(pre_key);
     ak_hash.final(&ak);
 
     var tag = HmacSha384.init(&ak);
+    defer util.secureZero(std.mem.asBytes(&tag));
     tag.update(header);
     tag.update(".");
     tag.update(salt);

@@ -49,10 +49,18 @@ pub const Public = struct {
     pub fn fromScalarBytes(bytes: []const u8) !Public {
         if (bytes.len != scalar_bytes) return Error.InvalidKey;
         var scalar: [scalar_bytes]u8 = undefined;
+        defer util.secureZero(&scalar);
         @memcpy(&scalar, bytes);
         const kp = EcdsaP384Sha384.KeyPair.fromSecretKey(.{ .bytes = scalar }) catch
             return Error.InvalidKey;
         return .{ .public_point = kp.public_key.p, .secret_scalar = scalar };
+    }
+
+    /// Zero the secret scalar in place. Use when a private key value is
+    /// discarded without an owning deinit path.
+    pub fn wipe(self: *Public) void {
+        if (self.secret_scalar) |*scalar| util.secureZero(scalar);
+        self.secret_scalar = null;
     }
 
     pub fn fromPaserk(allocator: std.mem.Allocator, paserk: []const u8) !Public {

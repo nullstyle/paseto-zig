@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Closed the audit residuals: `Claims.parsed` now enforces the 64 KiB cap
+  (closing the struct-literal bypass) and maps JSON parse failures onto the
+  library error set; expected `iss`/`aud`/`sub`/`jti` claims compare in
+  constant time with a full audience scan.
+- Hardened key-material lifetime from an independent three-lens review:
+  v3 key derivation and AES-CTR now take pointers instead of copying the
+  master key into extra stack frames, the v3 scalar import wipes its local
+  copy, every HMAC/SHA384 state absorbing key material is defer-wiped, PKE
+  unseal wipes its seed/secret copies, and the WASM export path guards
+  u32 descriptor writes with the same arena-fit check as `allocate`.
+- Added `wipe()` to v3/v4 `Local` and `Public` so callers can zero key
+  values without hand-rolling secureZero calls.
+- Documented the review's confirmations and the deliberate policy choices
+  (PBKW receiver-side parameter bounds, PIE v3 spec-prose vs vector
+  conflict) in `docs/security-audit.md`; added `docs/threat-model.md`.
+- Added a nightly mutation-fuzz workflow over the parser, envelope, and
+  scenario groups on the pinned dev snapshot, with crash-evidence upload.
 - Extended the ruby-paseto interop fixtures beyond tokens to the PASERK
   key-management operations: fresh PIE local-wrap/secret-wrap, PKE seal,
   and PBKW password-wrap outputs from the vendored reference are unwrapped

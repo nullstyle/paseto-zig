@@ -15,6 +15,11 @@ Upstream references:
 - PASERK specification: https://github.com/paseto-standard/paserk
 - Official test vectors: https://github.com/paseto-standard/test-vectors
 
+Note: the vendored `v3.json` 3-S-1/3-S-3 signature bytes differ from the
+current official repository's master branch (upstream re-signed those cases
+with randomized ECDSA nonces; the keys, messages, and PAE inputs are
+identical, and both signature sets verify). Both sets are valid.
+
 When refreshing vectors, update this file with the exact upstream source,
 commit, import date, and any generator command used. Then run:
 

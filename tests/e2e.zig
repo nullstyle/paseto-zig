@@ -558,3 +558,23 @@ test "PKE unseal rejects cross-version header confusion" {
     defer allocator.free(confused);
     try std.testing.expectError(paseto.Error.InvalidEncoding, recipient.unseal(allocator, confused));
 }
+
+test "key wipe() zeroes secret material" {
+    var local = try paseto.v4.Local.fromBytes(&(@as([32]u8, @splat(0xaa))));
+    local.wipe();
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0)), &local.key);
+
+    var v3_local = try paseto.v3.Local.fromBytes(&(@as([32]u8, @splat(0xaa))));
+    v3_local.wipe();
+    try std.testing.expectEqualSlices(u8, &@as([32]u8, @splat(0)), &v3_local.key);
+
+    const seed: [32]u8 = @splat(0xbb);
+    var signer = try paseto.v4.Public.fromSeed(&seed);
+    signer.wipe();
+    try std.testing.expect(signer.keypair == null);
+
+    const scalar: [48]u8 = @splat(0xcc);
+    var v3_signer = try paseto.v3.Public.fromScalarBytes(&scalar);
+    v3_signer.wipe();
+    try std.testing.expect(v3_signer.secret_scalar == null);
+}

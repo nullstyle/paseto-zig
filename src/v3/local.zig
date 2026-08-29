@@ -25,6 +25,12 @@ const pae_header = "v3.local.";
 pub const Local = struct {
     key: [key_bytes]u8,
 
+    /// Zero the key material in place. Use when a key value is discarded
+    /// without an owning deinit path.
+    pub fn wipe(self: *Local) void {
+        util.secureZero(&self.key);
+    }
+
     pub fn fromBytes(bytes: []const u8) !Local {
         if (bytes.len != key_bytes) return Error.InvalidKey;
         var k: Local = .{ .key = undefined };
@@ -69,12 +75,12 @@ pub const Local = struct {
             util.randomBytes(&nonce);
         }
 
-        var keys = deriveKeys(self.key, nonce);
+        var keys = deriveKeys(&self.key, &nonce);
         defer util.secureZero(std.mem.asBytes(&keys));
 
         const ciphertext = try allocator.alloc(u8, message.len);
         defer util.secureFree(allocator, ciphertext);
-        aes256Ctr(ciphertext, message, keys.ek, keys.iv);
+        aes256Ctr(ciphertext, message, &keys.ek, &keys.iv);
 
         var pae_parts: [5][]const u8 = .{
             pae_header,
@@ -138,7 +144,7 @@ pub const Local = struct {
         const ciphertext = payload[nonce_bytes .. payload.len - mac_bytes];
         const tag = payload[payload.len - mac_bytes ..];
 
-        var keys = deriveKeys(self.key, nonce.*);
+        var keys = deriveKeys(&self.key, nonce);
         defer util.secureZero(std.mem.asBytes(&keys));
 
         var pae_parts: [5][]const u8 = .{
@@ -157,7 +163,7 @@ pub const Local = struct {
 
         const plaintext = try allocator.alloc(u8, ciphertext.len);
         errdefer util.secureFree(allocator, plaintext);
-        aes256Ctr(plaintext, ciphertext, keys.ek, keys.iv);
+        aes256Ctr(plaintext, ciphertext, &keys.ek, &keys.iv);
         return plaintext;
     }
 
@@ -211,21 +217,23 @@ const DerivedKeys = struct {
     ak: [48]u8,
 };
 
-fn deriveKeys(key: [key_bytes]u8, nonce: [nonce_bytes]u8) DerivedKeys {
+/// Derive subkeys without copying the master key or nonce into additional
+/// stack frames (mirrors the v4 pointer-receiver discipline).
+fn deriveKeys(key: *const [key_bytes]u8, nonce: *const [nonce_bytes]u8) DerivedKeys {
     // HKDF-SHA384 with empty (all-zero) salt; v3 uses null salt per Ruby impl.
     // OpenSSL::KDF.hkdf passes a salt parameter of 0x00 * 48. In HKDF, a zero
     // salt and a null salt produce the same PRK, so we can pass an empty salt.
     var encrypt_info: [64]u8 = undefined;
     @memcpy(encrypt_info[0.."paseto-encryption-key".len], "paseto-encryption-key");
-    @memcpy(encrypt_info["paseto-encryption-key".len..][0..nonce_bytes], &nonce);
+    @memcpy(encrypt_info["paseto-encryption-key".len..][0..nonce_bytes], nonce);
     const encrypt_info_slice = encrypt_info[0 .. "paseto-encryption-key".len + nonce_bytes];
 
     var auth_info: [64]u8 = undefined;
     @memcpy(auth_info[0.."paseto-auth-key-for-aead".len], "paseto-auth-key-for-aead");
-    @memcpy(auth_info["paseto-auth-key-for-aead".len..][0..nonce_bytes], &nonce);
+    @memcpy(auth_info["paseto-auth-key-for-aead".len..][0..nonce_bytes], nonce);
     const auth_info_slice = auth_info[0 .. "paseto-auth-key-for-aead".len + nonce_bytes];
 
-    var prk = Hkdf.extract(&[_]u8{}, &key);
+    var prk = Hkdf.extract(&[_]u8{}, key);
     defer util.secureZero(std.mem.asBytes(&prk));
 
     var out: DerivedKeys = undefined;
@@ -239,9 +247,9 @@ fn deriveKeys(key: [key_bytes]u8, nonce: [nonce_bytes]u8) DerivedKeys {
     return out;
 }
 
-fn aes256Ctr(dst: []u8, src: []const u8, key: [32]u8, iv: [iv_bytes]u8) void {
-    const enc_ctx = Aes256.initEnc(key);
-    std.crypto.core.modes.ctr(@TypeOf(enc_ctx), enc_ctx, dst, src, iv, .big);
+fn aes256Ctr(dst: []u8, src: []const u8, key: *const [32]u8, iv: *const [iv_bytes]u8) void {
+    const enc_ctx = Aes256.initEnc(key.*);
+    std.crypto.core.modes.ctr(@TypeOf(enc_ctx), enc_ctx, dst, src, iv.*, .big);
 }
 
 test "v3.local round trip" {
