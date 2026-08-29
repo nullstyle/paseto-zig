@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - Closed the audit residuals: `Claims.parsed` now enforces the 64 KiB cap
   (closing the struct-literal bypass) and maps JSON parse failures onto the

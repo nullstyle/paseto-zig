@@ -33,7 +33,7 @@ Add `paseto-zig` to a consuming project's `build.zig.zon` with `zig fetch`.
 Pin releases by tag, or pin unreleased builds by full commit SHA:
 
 ```sh
-zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/refs/tags/0.3.0.tar.gz
+zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/refs/tags/0.4.0.tar.gz
 zig fetch --save-exact=paseto https://github.com/nullstyle/paseto-zig/archive/<commit-sha>.tar.gz
 ```
 
@@ -44,7 +44,7 @@ That writes a dependency entry like this:
 ```zig
 .dependencies = .{
     .paseto = .{
-        .url = "https://github.com/nullstyle/paseto-zig/archive/refs/tags/0.3.0.tar.gz",
+        .url = "https://github.com/nullstyle/paseto-zig/archive/refs/tags/0.4.0.tar.gz",
         .hash = "...",
     },
 },
