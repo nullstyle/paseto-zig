@@ -104,7 +104,7 @@ release-hygiene check that the tag, zon version, and README pin agree.
 
 ## Verification posture
 
-Spec conformance: official PASETO/PASERK vector suite (17 files) in CI.
+Spec conformance: official PASETO/PASERK vector suite (18 files) in CI.
 Cross-implementation: fresh ruby-paseto fixtures (tokens, PIE/PKE/PBKW)
 verified in CI. Adversarial: 14 deterministic fuzz harnesses with
 corpus/regression promotion, nightly mutation soaks on the parser,

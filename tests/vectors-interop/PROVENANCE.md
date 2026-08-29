@@ -39,8 +39,10 @@ Conventions and caveats:
   full 64-byte Ed25519 keypair, v3 wraps the 48-byte scalar.
 - Payloads are ASCII-only: the reference's PAE concat cannot handle
   multibyte strings (its v3 path raises `Encoding::CompatibilityError`,
-  and its v4.public signatures over UTF-8 messages do not verify against
-  the spec-defined PAE). ASCII payloads exercise the full cryptographic
+  and its v4.public signatures over UTF-8 messages are corrupted by the
+  RbNaCl signing path, which slices the 64-byte signature by character
+  count on a UTF-8-tagged buffer; the PAE itself is byte-correct, but the
+  emitted tokens fail even the reference's own verification). ASCII payloads exercise the full cryptographic
   path, and byte-level handling of arbitrary plaintexts is covered by the
   official vector suite and this library's own tests.
 - Each fixture case is additionally fed to every wrong version/purpose

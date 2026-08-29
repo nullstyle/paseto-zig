@@ -77,7 +77,7 @@ zig build wasm
 ```
 
 The ReleaseSafe artifact is written to `zig-out/wasm/paseto.wasm`. The build
-post-processes it with mise-pinned Binaryen 130 and produces a 39,948-byte
+post-processes it with mise-pinned Binaryen 130 and produces a 39,960-byte
 module. It exports only allocator lifecycle operations, v4.local `seal`/`open`,
 and PASERK `k4.lid` derivation. The host must provide every 32-byte token nonce
 from a CSPRNG; the freestanding module does not import host randomness.
@@ -210,7 +210,7 @@ const validator: paseto.Validator = .{
 try validator.validate(claims_json, allocator);
 ```
 
-The validator understands the six PASETO registered claims (`exp`, `nbf`,
+The validator understands the seven PASETO registered claims (`exp`, `nbf`,
 `iat`, `iss`, `aud`, `sub`, `jti`). Timestamps are parsed from ISO-8601
 strings in the form `YYYY-MM-DDTHH:MM:SS(.fff)?(Z|±HH:MM)`. Setting an
 `expected_*` field requires that claim to be present and equal to the expected

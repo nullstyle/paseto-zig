@@ -172,7 +172,7 @@ discipline verified on every path. Dispositions of their findings:
 ## 14. Verification index
 
 Every row above maps to at least one of: official vector files under
-`tests/vectors/` (17 files: v3, v4, and 15 PASERK operations), the e2e
+`tests/vectors/` (18 files: v3, v4, and 16 PASERK operations), the e2e
 negatives in `tests/e2e.zig`, the fuzz error contracts in `tests/fuzz/`
 (14 harnesses with corpus and regression inputs, including
 `mixed_version_misuse` and `mixed_purpose_misuse` scenario families), the
