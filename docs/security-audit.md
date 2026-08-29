@@ -100,7 +100,7 @@ test. Input size caps referenced throughout live in `src/util.zig`:
 | 64 KiB cap enforced on **every** entry point | fixed | was Validator-only, leaving `Claims.init`/`Claims.parsed` unbounded; `Claims.init` now rejects > 64 KiB with `InvalidClaim` (boundary-tested) |
 | JSON nesting bounded by the input cap | verified | `std.json.parseFromSlice` over capped input |
 | Timestamp parsing width-checked, no overflow | verified | bounded decimal parser, offset range checks, Hinnant `daysFromCivil` |
-| `expected_*` string comparisons use early-exit `std.mem.eql` | documented | compared values are not secrets in the threat models this library targets (attacker-supplied claim vs. public expected value); the leak is at most a shared-prefix length on public data. Noted in `SECURITY.md`. |
+| `expected_*` string comparisons (`iss`, `aud`, `sub`, `jti`) | fixed | all four now use `util.constantTimeEqual`; the `aud` scan evaluates every candidate with no early break (unit test "validator audience list scans every candidate") |
 
 ## 10. WASM ABI — `src/wasm.zig`
 
@@ -130,12 +130,12 @@ pointer, length, and nonce).
 
 ## 12. Residual risks
 
-- No third-party cryptographic audit has been performed.
+- No third-party cryptographic audit has been performed (a threat model
+  now exists in `docs/threat-model.md` as groundwork for one).
 - `Claims` struct literals can be built by field access, bypassing
-  `Claims.init`'s cap; validation still re-checks the cap in
-  `Validator.validate`.
-- The claims `aud` loop breaks on first match; ordering of the expected
-  audience list is not constant-time (public data — see §9).
+  `Claims.init`'s cap; `Claims.parsed` now enforces the same cap before
+  parsing, so every remaining JSON entry point on the type is bounded
+  (unit test "Claims.parsed enforces the cap for struct literals").
 - The freestanding WASM module trusts the host for nonce entropy by design;
   a host that repeats nonces with the same key breaks confidentiality
   (documented in `docs/wasm.md`).

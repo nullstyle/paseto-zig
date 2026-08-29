@@ -414,11 +414,18 @@ zig build fuzz-envelopes --fuzz
 zig build fuzz-scenario --fuzz --webui
 ```
 
-Keep this local and on-demand. There is no CI, cron, or built-in coordinator
-for these runs, and 48-hour soaks are manual, iterative sessions. This README
-update was verified with bounded `--fuzz=<limit>` commands, not with an actual
-48-hour soak. Long-run coverage is still bounded by the quality of the corpus
-seeds and the invariants each harness encodes.
+Keep this local and on-demand for deep soaks. For unattended coverage, a
+nightly GitHub Actions workflow (`.github/workflows/fuzz-nightly.yml`) runs
+mutation passes over all three groups with per-group iteration budgets
+(parsers 20k, envelopes 3k, scenarios 5k — envelopes is slowest per
+iteration because of the PBKW argon2 paths) on the same pinned dev snapshot
+as the CI canary, since builtin mutation mode requires a development
+toolchain. The nightly is signal, not a gate: a crash uploads the run log
+and corpus state as an artifact for triage. Reduce any crash locally with
+the single-harness target, then promote it into
+`tests/fuzz/corpus/<harness>/` or `tests/fuzz/regressions/<harness>/` and
+wire it into the seed list as above. Long-run coverage is still bounded by
+the quality of the corpus seeds and the invariants each harness encodes.
 
 ### Corpus and regression policy
 

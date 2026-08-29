@@ -33,6 +33,9 @@ pub const Claims = struct {
     }
 
     pub fn parsed(self: Claims) !std.json.Parsed(std.json.Value) {
+        // Struct literals can bypass init's cap, so bound the parse here too:
+        // this is the last untrusted-JSON entry point on the Claims type.
+        if (self.json.len > util.max_claims_json_bytes) return Error.InvalidClaim;
         return try std.json.parseFromSlice(std.json.Value, self.allocator, self.json, .{});
     }
 };
@@ -109,7 +112,7 @@ pub const Validator = struct {
         if (self.expected_issuer) |expected| {
             const v = obj.get("iss") orelse return Error.InvalidIssuer;
             if (v != .string) return Error.InvalidIssuer;
-            if (!std.mem.eql(u8, v.string, expected)) return Error.InvalidIssuer;
+            if (!util.constantTimeEqual(v.string, expected)) return Error.InvalidIssuer;
         } else if (self.require_issuer) {
             const v = obj.get("iss") orelse return Error.InvalidIssuer;
             if (v != .string) return Error.InvalidIssuer;
@@ -118,11 +121,12 @@ pub const Validator = struct {
         if (self.expected_audience) |list| {
             const v = obj.get("aud") orelse return Error.InvalidAudience;
             if (v != .string) return Error.InvalidAudience;
+            // Scan the whole list so the number of candidates examined does
+            // not depend on where (or whether) a match was found.
             var matched = false;
             for (list) |candidate| {
-                if (std.mem.eql(u8, v.string, candidate)) {
+                if (util.constantTimeEqual(v.string, candidate)) {
                     matched = true;
-                    break;
                 }
             }
             if (!matched) return Error.InvalidAudience;
@@ -134,7 +138,7 @@ pub const Validator = struct {
         if (self.expected_subject) |expected| {
             const v = obj.get("sub") orelse return Error.InvalidSubject;
             if (v != .string) return Error.InvalidSubject;
-            if (!std.mem.eql(u8, v.string, expected)) return Error.InvalidSubject;
+            if (!util.constantTimeEqual(v.string, expected)) return Error.InvalidSubject;
         } else if (self.require_subject) {
             const v = obj.get("sub") orelse return Error.InvalidSubject;
             if (v != .string) return Error.InvalidSubject;
@@ -143,7 +147,7 @@ pub const Validator = struct {
         if (self.expected_token_identifier) |expected| {
             const v = obj.get("jti") orelse return Error.InvalidTokenIdentifier;
             if (v != .string) return Error.InvalidTokenIdentifier;
-            if (!std.mem.eql(u8, v.string, expected)) return Error.InvalidTokenIdentifier;
+            if (!util.constantTimeEqual(v.string, expected)) return Error.InvalidTokenIdentifier;
         } else if (self.require_token_identifier) {
             const v = obj.get("jti") orelse return Error.InvalidTokenIdentifier;
             if (v != .string) return Error.InvalidTokenIdentifier;
@@ -348,4 +352,31 @@ test "validator checks exp" {
 
     val.now_override = 1_600_000_000;
     try val.validate(claims, allocator);
+}
+
+test "Claims.parsed enforces the cap for struct literals" {
+    const allocator = std.testing.allocator;
+    const big = try allocator.alloc(u8, util.max_claims_json_bytes + 1);
+    defer allocator.free(big);
+    @memset(big, ' ');
+    // Struct literals bypass init's cap by construction; parsed() is the
+    // remaining JSON parse entry point and must enforce the bound itself.
+    const claims = Claims{ .json = big, .allocator = allocator };
+    try std.testing.expectError(Error.InvalidClaim, claims.parsed());
+}
+
+test "validator audience list scans every candidate" {
+    const allocator = std.testing.allocator;
+    const claims = "{\"aud\":\"svc-c.example.com\"}";
+    const v: Validator = .{
+        .now_override = 1_700_000_000,
+        .expected_audience = &.{ "svc-a.example.com", "svc-b.example.com", "svc-c.example.com" },
+    };
+    try v.validate(claims, allocator);
+
+    const v_miss: Validator = .{
+        .now_override = 1_700_000_000,
+        .expected_audience = &.{ "svc-a.example.com", "svc-b.example.com", "svc-d.example.com" },
+    };
+    try std.testing.expectError(Error.InvalidAudience, v_miss.validate(claims, allocator));
 }

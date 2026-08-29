@@ -42,11 +42,11 @@ These are documented behaviors, not vulnerabilities:
   (v4: 64–256 MiB / opslimit 2–3 / `para == 1`; v3: 1,000–10,000 iterations)
   before the KDF runs, bounding each attempt to policy maximum. Callers
   exposed to unauthenticated peers should rate-limit unwrap attempts.
-- **Claims string comparisons.** Registered-claim checks (`iss`, `aud`,
+- **Claims comparison timing.** Registered-claim checks (`iss`, `aud`,
   `sub`, `jti`) compare attacker-supplied claim values against expected
-  values with early-exit equality. The compared data is public (token claims
-  and configured expected values), so the only observable signal is a
-  shared-prefix length on non-secret data.
+  values with constant-time equality (the `aud` list is scanned in full,
+  with no early exit). Claim lengths and the outcome itself remain
+  observable, which is inherent to returning a typed validation error.
 - **Deterministic overrides.** The `nonce`, `salt`, and
   `ephemeral_override` options exist for vectors and fuzzing. Reusing a
   deterministic nonce with the same key breaks confidentiality; production
@@ -54,4 +54,6 @@ These are documented behaviors, not vulnerabilities:
 
 A full checklist of the untrusted-input audit performed for this release,
 mapped to spec sections and tests, is maintained in
-[`docs/security-audit.md`](docs/security-audit.md).
+[`docs/security-audit.md`](docs/security-audit.md); the attacker model and
+trust boundaries it assumes are documented in
+[`docs/threat-model.md`](docs/threat-model.md).

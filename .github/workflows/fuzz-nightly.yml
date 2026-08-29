@@ -1,0 +1,68 @@
+name: Fuzz Nightly
+
+# Nightly mutation-fuzz soaks. Mutation mode requires a Zig development
+# toolchain, so this job pins the same dev snapshot as the CI canary and is
+# deliberately separate from the gating workflow: a red nightly is signal
+# to triage, never a merge block. Budgets are iteration-bounded per group
+# (the PBKW argon2 paths make `envelopes` the slowest group per iteration).
+# A crash input found here is reduced locally, then promoted into
+# tests/fuzz/corpus/<harness>/ or tests/fuzz/regressions/<harness>/ and
+# wired into the harness seed list per the README's corpus policy.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MISE_ZIG_USE_COMMUNITY_MIRRORS: "false"
+  ZIG_DEV: '0.17.0-dev.1786+75044cb04'
+
+jobs:
+  mutation-fuzz:
+    name: Mutation fuzz (${{ matrix.group }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - parsers
+          - envelopes
+          - scenarios
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pinned Zig dev snapshot
+        uses: jdx/mise-action@v3
+        with:
+          cache: true
+          install_args: "zig@${{ env.ZIG_DEV }}"
+
+      - name: Run mutation soak
+        run: |
+          case "${{ matrix.group }}" in
+            parsers)    BUDGET=20000 ;;
+            envelopes)  BUDGET=3000 ;;
+            scenarios)  BUDGET=5000 ;;
+          esac
+          echo "group=${{ matrix.group }} budget=$BUDGET"
+          set -o pipefail
+          mise exec "zig@${{ env.ZIG_DEV }}" -- \
+            zig build "fuzz-${{ matrix.group }}" "--fuzz=$BUDGET" 2>&1 | tee fuzz-output.txt
+
+      - name: Upload crash evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.group }}-${{ github.run_id }}
+          path: |
+            fuzz-output.txt
+            tests/fuzz/corpus/
+            tests/fuzz/regressions/
+          if-no-files-found: error
+          retention-days: 30
