@@ -157,6 +157,22 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_wasm_abi_tests.step);
     test_step.dependOn(&run_interop_tests.step);
 
+    // `zig build examples` — build and run the motivating example programs.
+    const fleet_demo_mod = b.createModule(.{
+        .root_source_file = b.path("examples/fleet_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fleet_demo_mod.addImport("paseto", paseto_mod);
+    const fleet_demo = b.addExecutable(.{
+        .name = "fleet-demo",
+        .root_module = fleet_demo_mod,
+    });
+    b.installArtifact(fleet_demo);
+    const run_fleet_demo = b.addRunArtifact(fleet_demo);
+    const examples_step = b.step("examples", "Build and run the example programs");
+    examples_step.dependOn(&run_fleet_demo.step);
+
     // -- Fuzz suite ------------------------------------------------------
     //
     // Every harness is registered via `addFuzzHarness`, which attaches the

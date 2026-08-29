@@ -14,6 +14,7 @@
         "tests/interop.zig",
         "tests/fuzz",
         "tests/wasm_abi.zig",
+        "examples",
         "docs",
         "README.md",
         "CHANGELOG.md",

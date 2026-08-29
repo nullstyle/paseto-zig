@@ -257,6 +257,20 @@ value is configured.
   `Io` can use the lower-level byte APIs and inject deterministic
   `nonce` / `salt` / `ephemeral_override` values (used by the vector tests).
 
+## Examples
+
+[`examples/fleet_demo.zig`](examples/fleet_demo.zig) is a runnable tour of
+the v4 feature set — one edge-fleet story that exercises node identity with
+`k4.pid`, footer key-hint routing and rotation, channel-bound challenges via
+implicit assertion (with a replay negative), PIE config-key delivery and
+rotation by `k4.lid`, anonymous telemetry composed from `k4.seal` plus
+`v4.local`, and PBKW break-glass escrow. Every act demonstrates its failure
+path alongside the happy one, and the output is deterministic:
+
+```sh
+zig build examples
+```
+
 ## Testing
 
 ```sh

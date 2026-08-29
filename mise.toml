@@ -11,6 +11,7 @@ run = [
   "tools/release-check.sh",
   "zig build unit",
   "zig build e2e",
+  "zig build examples",
   "zig build wasm-test",
   "zig build wasm",
   "deno run --allow-read=zig-out tests/wasm/deno_smoke.ts",

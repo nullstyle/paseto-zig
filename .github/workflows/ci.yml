@@ -57,6 +57,9 @@ jobs:
       - name: Run end-to-end tests
         run: zig build e2e
 
+      - name: Run example programs
+        run: zig build examples
+
       - name: Test WASM ABI
         run: zig build wasm-test
 

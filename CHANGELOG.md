@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added `zig build examples` with `examples/fleet_demo.zig`: a
+  deterministic, runnable tour of the v4 feature set (pid pinning, footer
+  key-hint routing, implicit-assertion channel binding, PIE rotation by
+  lid, seal+v4.local anonymous submission, PBKW escrow), each with its
+  negative path; wired into CI.
+
 ## 0.4.0
 
 - Closed the audit residuals: `Claims.parsed` now enforces the 64 KiB cap
