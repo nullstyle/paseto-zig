@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Extended the ruby-paseto interop fixtures beyond tokens to the PASERK
+  key-management operations: fresh PIE local-wrap/secret-wrap, PKE seal,
+  and PBKW password-wrap outputs from the vendored reference are unwrapped
+  by `zig build interop` with recovered key material required to match
+  byte-for-byte (PIE v4 under deterministic nonces; PBKW under the default
+  production policy, plus a wrong-password negative).
+
 ## 0.3.0
 
 ### Freestanding WebAssembly module

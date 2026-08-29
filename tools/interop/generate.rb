@@ -55,6 +55,13 @@ def hex(str)
   str.unpack1('H*')
 end
 
+# SymmetricKey exposes the raw key via #key; AsymmetricKey#key is the
+# underlying OpenSSL/RbNaCl object, while #to_bytes is the PASERK wire form
+# (v4 seed / v3 scalar) that wrapping operations encrypt.
+def key_bytes(key)
+  key.is_a?(Paseto::SymmetricKey) ? key.key : key.to_bytes
+end
+
 def local_cases(version, key, nonce)
   sk = version == 'v4' ? Paseto::V4::Local.new(ikm: key) : Paseto::V3::Local.new(ikm: key)
   payloads_for(version).flat_map do |label, payload|
@@ -67,6 +74,7 @@ def local_cases(version, key, nonce)
       token = sk.encrypt(message: payload, n: nonce, **opts)
       {
         'name' => "#{version}-local-#{label}-#{i}",
+        'op' => 'token',
         'version' => version,
         'purpose' => 'local',
         'key_hex' => hex(key),
@@ -92,6 +100,7 @@ def v4_public_cases
       token = signing.sign(message: payload, **opts)
       {
         'name' => "v4-public-#{label}-#{i}",
+        'op' => 'token',
         'version' => 'v4',
         'purpose' => 'public',
         'seed_hex' => hex(V4_SIGN_SEED),
@@ -120,6 +129,7 @@ def v3_public_cases
       token = signing.sign(message: payload, **opts)
       {
         'name' => "v3-public-#{label}-#{i}",
+        'op' => 'token',
         'version' => 'v3',
         'purpose' => 'public',
         'scalar_hex' => hex(V3_SCALAR),
@@ -137,11 +147,87 @@ def v3_public_cases
   end
 end
 
+
+V4_PIE_NONCE = (0...32).map { |i| ((i * 3 + 5) & 0xff).chr }.join
+V3_PIE_NONCE = (0...32).map { |i| ((i * 3 + 5) & 0xff).chr }.join
+PBKW_PASSWORD = 'interop pbkw password 01'
+
+# PIE: deterministic nonce makes v4 output byte-stable across regenerations.
+def pie_cases(version, wrapping_key, victims, nonce)
+  victims.filter_map do |label, victim_key|
+    next unless victim_key
+    wrapped = Paseto::Paserk.wrap(key: victim_key, wrapping_key: wrapping_key, nonce: nonce)
+    {
+      'name' => "#{version}-pie-#{label}",
+      'op' => 'pie',
+      'version' => version,
+      'wrapping_key_hex' => hex(wrapping_key.key),
+      'paserk' => wrapped,
+      'unwrapped_kind' => label,
+      'victim_hex' => hex(key_bytes(victim_key)),
+    }
+  end
+end
+
+# PKE: ephemeral keys are random per run; recorded values stay valid.
+# recipient_hex is the unsealing key in wire form: v4 seed (32) or v3
+# scalar (48).
+def pke_cases(version, _recipient, recipient_hex, victim_key, victim_label)
+  sealed = _recipient.seal(victim_key)
+  [{
+    'name' => "#{version}-pke-#{victim_label}",
+    'op' => 'pke',
+    'version' => version,
+    'recipient_hex' => recipient_hex,
+    'paserk' => sealed,
+    'unwrapped_kind' => victim_label,
+    'victim_hex' => hex(key_bytes(victim_key)),
+  }]
+end
+
+# PBKW: salt and nonce are random per run; recorded values stay valid.
+# Parameters sit inside paseto-zig's production policy envelope so the Zig
+# side unwraps with the default (production) policy in CI.
+def pbkw_cases
+  v4_local = Paseto::V4::Local.new(ikm: V4_LOCAL_KEY)
+  v4_secret = Paseto::V4::Public.new(RbNaCl::SigningKey.new(V4_SIGN_SEED))
+  v3_local = Paseto::V3::Local.new(ikm: V3_LOCAL_KEY)
+
+  [
+    ['v4-pbwk-local', 'v4', v4_local, 'local', { memlimit: 67_108_864, opslimit: 2 }],
+    ['v4-pbwk-secret', 'v4', v4_secret, 'secret', { memlimit: 67_108_864, opslimit: 2 }],
+    ['v3-pbwk-local', 'v3', v3_local, 'local', { iterations: 10_000 }],
+  ].map do |name, version, key, kind, params|
+    wrapped = Paseto::Paserk.pbkw(key: key, password: PBKW_PASSWORD, options: params)
+    {
+      'name' => name,
+      'op' => 'pbkw',
+      'version' => version,
+      'password' => PBKW_PASSWORD,
+      'paserk' => wrapped,
+      'unwrapped_kind' => kind,
+      'victim_hex' => hex(key_bytes(key)),
+    }
+  end
+end
+
+v4_wrapping = Paseto::V4::Local.new(ikm: V4_LOCAL_KEY)
+v3_wrapping = Paseto::V3::Local.new(ikm: V3_LOCAL_KEY)
+v4_secret_victim = Paseto::V4::Public.new(RbNaCl::SigningKey.new(V4_SIGN_SEED))
+v3_secret_victim = Paseto::V3::Public.from_scalar_bytes(V3_SCALAR)
+v4_local_victim = Paseto::V4::Local.new(ikm: V4_LOCAL_KEY)
+v3_local_victim = Paseto::V3::Local.new(ikm: V3_LOCAL_KEY)
+
 cases = [
   *local_cases('v4', V4_LOCAL_KEY, V4_NONCE),
   *v4_public_cases,
   *local_cases('v3', V3_LOCAL_KEY, V3_NONCE),
   *v3_public_cases,
+  *pie_cases('v4', v4_wrapping, [['local', v4_local_victim], ['secret', v4_secret_victim]], V4_PIE_NONCE),
+  *pie_cases('v3', v3_wrapping, [['local', v3_local_victim], ['secret', v3_secret_victim]], V3_PIE_NONCE),
+  *pke_cases('v4', Paseto::V4::Public.from_public_bytes(v4_secret_victim.public_bytes), hex(V4_SIGN_SEED), v4_local_victim, 'local'),
+  *pke_cases('v3', Paseto::V3::Public.from_public_bytes(v3_secret_victim.public_bytes), hex(V3_SCALAR), v3_local_victim, 'local'),
+  *pbkw_cases,
 ]
 
 doc = {

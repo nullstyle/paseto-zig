@@ -24,11 +24,19 @@ Ruby toolchain is needed to test.
 
 Conventions and caveats:
 
-- Keys, nonces, and payloads are fixed, so v4 fixtures (deterministic
-  Ed25519, caller-supplied nonce for local) are byte-stable across
-  regenerations with the same vendored commit.
-- v3.public ECDSA signatures are randomized by OpenSSL per run: recorded
-  tokens stay valid, but regenerating changes those signature bytes.
+- Keys, nonces, and payloads are fixed, so v4 token fixtures (deterministic
+  Ed25519, caller-supplied nonces for local encrypt and PIE wrap) are
+  byte-stable across regenerations with the same vendored commit. Note that
+  v4 PIE nonces are 32 bytes (per the official wrap vectors), unlike the
+  24-byte v4 PBKW nonces.
+- v3.public ECDSA signatures, PKE seals (random ephemeral keys), and PBKW
+  wraps (random salt and nonce) are randomized per run: recorded values
+  stay valid, but regenerating changes those bytes.
+- PBKW fixture parameters (v4: 64 MiB / opslimit 2; v3: 10,000 iterations)
+  sit inside paseto-zig's production policy envelope, so the Zig side
+  unwraps them under the default policy in CI.
+- PIE secret-wrap fixtures follow the official vector shape: v4 wraps the
+  full 64-byte Ed25519 keypair, v3 wraps the 48-byte scalar.
 - Payloads are ASCII-only: the reference's PAE concat cannot handle
   multibyte strings (its v3 path raises `Encoding::CompatibilityError`,
   and its v4.public signatures over UTF-8 messages do not verify against

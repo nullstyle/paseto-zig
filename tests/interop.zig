@@ -31,18 +31,35 @@ test "ruby-paseto interop fixtures" {
     defer parsed.deinit();
 
     const cases = parsed.value.object.get("cases").?.array;
-    try std.testing.expect(cases.items.len >= 36);
+    try std.testing.expect(cases.items.len >= 45);
 
     var seen_local: usize = 0;
     var seen_public: usize = 0;
+    var seen_paserk_ops: usize = 0;
     for (cases.items) |case_val| {
         const c = case_val.object;
         const name = try expectField(c, "name");
+        const op = try expectField(c, "op");
+        const version = try expectField(c, "version");
+
+        if (std.mem.eql(u8, op, "pie")) {
+            try runPieCase(allocator, name, c);
+            seen_paserk_ops += 1;
+            continue;
+        } else if (std.mem.eql(u8, op, "pke")) {
+            try runPkeCase(allocator, name, c, version);
+            seen_paserk_ops += 1;
+            continue;
+        } else if (std.mem.eql(u8, op, "pbkw")) {
+            try runPbkwCase(allocator, name, c, version);
+            seen_paserk_ops += 1;
+            continue;
+        }
+
         const token = try expectField(c, "token");
         const plaintext = try expectField(c, "plaintext");
         const footer = try expectField(c, "footer");
         const implicit_assertion = try expectField(c, "implicit_assertion");
-        const version = try expectField(c, "version");
         const purpose = try expectField(c, "purpose");
 
         if (std.mem.eql(u8, purpose, "local")) {
@@ -60,6 +77,105 @@ test "ruby-paseto interop fixtures" {
 
     try std.testing.expect(seen_local >= 24);
     try std.testing.expect(seen_public >= 12);
+    try std.testing.expect(seen_paserk_ops >= 9);
+}
+
+/// PIE: unwrap the reference's local-wrap/secret-wrap output with the
+/// wrapping key and require the recovered key material to match.
+fn runPieCase(allocator: std.mem.Allocator, name: []const u8, c: std.json.ObjectMap) !void {
+    const wrapping_key_hex = try expectField(c, "wrapping_key_hex");
+    const paserk = try expectField(c, "paserk");
+    const unwrapped_kind = try expectField(c, "unwrapped_kind");
+    const victim_hex = try expectField(c, "victim_hex");
+
+    const key_bytes = try hexToArr(wrapping_key_hex, 32);
+    const victim = try paseto.util.hexDecodeAlloc(allocator, victim_hex);
+    defer paseto.util.secureFree(allocator, victim);
+
+    if (std.mem.startsWith(u8, paserk, "k4.")) {
+        const wrapping = try paseto.v4.Local.fromBytes(&key_bytes);
+        var unwrapped = try wrapping.unwrap(allocator, paserk);
+        defer unwrapped.deinit();
+        try expectKind(name, unwrapped_kind, unwrapped.kind);
+        try expectBytes(name, victim, unwrapped.bytes);
+    } else {
+        const wrapping = try paseto.v3.Local.fromBytes(&key_bytes);
+        var unwrapped = try wrapping.unwrap(allocator, paserk);
+        defer unwrapped.deinit();
+        try expectKind(name, unwrapped_kind, unwrapped.kind);
+        try expectBytes(name, victim, unwrapped.bytes);
+    }
+}
+
+/// PKE: unseal the reference's seal output with the recipient key and
+/// require the recovered key material to match.
+fn runPkeCase(allocator: std.mem.Allocator, name: []const u8, c: std.json.ObjectMap, version: []const u8) !void {
+    const recipient_hex = try expectField(c, "recipient_hex");
+    const paserk = try expectField(c, "paserk");
+    const victim_hex = try expectField(c, "victim_hex");
+
+    const victim = try paseto.util.hexDecodeAlloc(allocator, victim_hex);
+    defer paseto.util.secureFree(allocator, victim);
+
+    if (std.mem.eql(u8, version, "v4")) {
+        const seed = try hexToArr(recipient_hex, 32);
+        const recipient = try paseto.v4.Public.fromSeed(&seed);
+        const out = try recipient.unseal(allocator, paserk);
+        defer paseto.util.secureFree(allocator, out);
+        try expectBytes(name, victim, out);
+    } else {
+        const scalar = try hexToArr(recipient_hex, 48);
+        const recipient = try paseto.v3.Public.fromScalarBytes(&scalar);
+        const out = try recipient.unseal(allocator, paserk);
+        defer paseto.util.secureFree(allocator, out);
+        try expectBytes(name, victim, out);
+    }
+}
+
+/// PBKW: unwrap the reference's password-wrapped output under the default
+/// (production) policy — the fixture parameters sit inside that envelope —
+/// plus one wrong-password negative.
+fn runPbkwCase(allocator: std.mem.Allocator, name: []const u8, c: std.json.ObjectMap, version: []const u8) !void {
+    _ = version;
+    const password = try expectField(c, "password");
+    const paserk = try expectField(c, "paserk");
+    const unwrapped_kind = try expectField(c, "unwrapped_kind");
+    const victim_hex = try expectField(c, "victim_hex");
+
+    const victim = try paseto.util.hexDecodeAlloc(allocator, victim_hex);
+    defer paseto.util.secureFree(allocator, victim);
+
+    var unwrapped = try paseto.paserk.pbkw.unwrap(allocator, password, paserk);
+    defer unwrapped.deinit();
+    try expectKind(name, unwrapped_kind, unwrapped.kind);
+    try expectBytes(name, victim, unwrapped.bytes);
+
+    if (std.mem.startsWith(u8, name, "v4-pbwk-local")) {
+        try std.testing.expectError(
+            paseto.Error.InvalidAuthenticator,
+            paseto.paserk.pbkw.unwrap(allocator, "wrong password", paserk),
+        );
+    }
+}
+
+fn expectKind(name: []const u8, expected: []const u8, actual: anytype) !void {
+    const matches = if (std.mem.eql(u8, expected, "local"))
+        actual == .local
+    else if (std.mem.eql(u8, expected, "secret"))
+        actual == .secret
+    else
+        false;
+    if (!matches) {
+        std.debug.print("interop case {s}: unexpected unwrapped kind\n", .{name});
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn expectBytes(name: []const u8, expected: []const u8, actual: []const u8) !void {
+    std.testing.expectEqualStrings(expected, actual) catch |err| {
+        std.debug.print("interop case {s}: unwrapped bytes mismatch\n", .{name});
+        return err;
+    };
 }
 
 fn runLocalCase(
