@@ -25,7 +25,7 @@ jobs:
   mutation-fuzz:
     name: Mutation fuzz (${{ matrix.group }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -43,17 +43,38 @@ jobs:
           cache: true
           install_args: "zig@${{ env.ZIG_DEV }}"
 
+      # The budget is per fuzz test, and every harness binary keeps fuzzing
+      # after another binary in the group crashes, so size group budgets by
+      # the slowest (argon2/PBKDF2) round-trip tests on a 2-vCPU runner:
+      # budget 3000 was still running at 45 minutes.
       - name: Run mutation soak
         run: |
           case "${{ matrix.group }}" in
             parsers)    BUDGET=20000 ;;
-            envelopes)  BUDGET=3000 ;;
+            envelopes)  BUDGET=1000 ;;
             scenarios)  BUDGET=5000 ;;
           esac
           echo "group=${{ matrix.group }} budget=$BUDGET"
           set -o pipefail
+          status=0
           mise exec "zig@${{ env.ZIG_DEV }}" -- \
-            zig build "fuzz-${{ matrix.group }}" "--fuzz=$BUDGET" 2>&1 | tee fuzz-output.txt
+            zig build "fuzz-${{ matrix.group }}" "--fuzz=$BUDGET" 2>&1 | tee fuzz-output.txt || status=$?
+          if [ "$status" -eq 0 ]; then exit 0; fi
+          # Known toolchain bug (see ziglang/zig PR #31205): a fuzzer process
+          # that dies mid-init can leave a zero-filled coverage file in
+          # .zig-cache/v/, and the build runner's report then fatals with
+          # "corrupted coverage file ... pcs_len was zero" even though every
+          # harness ran clean. Fail only on real crash markers and downgrade
+          # that specific infra failure to a visible warning.
+          if grep -v "corrupted coverage file" fuzz-output.txt | \
+              grep -qE "run test failure|exited with code|error:|panic:|Segmentation fault|unexpected fuzz error"; then
+            exit "$status"
+          fi
+          if grep -q "corrupted coverage file" fuzz-output.txt; then
+            echo "::warning::group=${{ matrix.group }}: Zig fuzz-runner coverage-file bug (pcs_len was zero); no harness failure detected"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Upload crash evidence
         if: failure()

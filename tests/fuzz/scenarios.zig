@@ -243,28 +243,16 @@ fn runPaserkKeyRoundTrip(s: *std.testing.Smith) !void {
     const allocator = std.testing.allocator;
     const version = s.value(paseto.Version);
     const kind = s.value(paseto.paserk.KeyType);
-    const len: usize = switch (version) {
-        .v3 => switch (kind) {
-            .local => 32,
-            .public => 49,
-            .secret => 48,
-        },
-        .v4 => switch (kind) {
-            .local => 32,
-            .public => 32,
-            .secret => 64,
-        },
-    };
     var buf: [64]u8 = undefined;
-    s.bytes(buf[0..len]);
+    const key_bytes = try support.fillValidKeyMaterial(version, kind, s, &buf);
 
-    const paserk_str = try paseto.paserk.keys.serialize(allocator, version, kind, buf[0..len]);
+    const paserk_str = try paseto.paserk.keys.serialize(allocator, version, kind, key_bytes);
     defer allocator.free(paserk_str);
     var decoded = try paseto.paserk.keys.parse(allocator, paserk_str);
     defer decoded.deinit();
     try std.testing.expectEqual(version, decoded.version);
     try std.testing.expectEqual(kind, decoded.kind);
-    try std.testing.expectEqualSlices(u8, buf[0..len], decoded.bytes);
+    try std.testing.expectEqualSlices(u8, key_bytes, decoded.bytes);
 }
 
 fn runPieRoundTrip(s: *std.testing.Smith) !void {
@@ -273,26 +261,16 @@ fn runPieRoundTrip(s: *std.testing.Smith) !void {
     const kind = s.value(paseto.paserk.pie.Kind);
     var wrapping: [32]u8 = undefined;
     s.bytes(&wrapping);
-    const ptk_len: usize = switch (version) {
-        .v3 => switch (kind) {
-            .local => 32,
-            .secret => 48,
-        },
-        .v4 => switch (kind) {
-            .local => 32,
-            .secret => 64,
-        },
-    };
-    var ptk: [64]u8 = undefined;
-    s.bytes(ptk[0..ptk_len]);
+    var ptk_buf: [64]u8 = undefined;
+    const ptk = try support.fillValidKeyMaterial(version, kind.toKeyType(), s, &ptk_buf);
 
-    const wrapped = try paseto.paserk.pie.wrap(allocator, version, kind, &wrapping, ptk[0..ptk_len], .{});
+    const wrapped = try paseto.paserk.pie.wrap(allocator, version, kind, &wrapping, ptk, .{});
     defer allocator.free(wrapped);
     var out = try paseto.paserk.pie.unwrap(allocator, &wrapping, wrapped);
     defer out.deinit();
     try std.testing.expectEqual(version, out.version);
     try std.testing.expectEqual(kind, out.kind);
-    try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], out.bytes);
+    try std.testing.expectEqualSlices(u8, ptk, out.bytes);
 }
 
 fn runPkeRoundTrip(s: *std.testing.Smith) !void {
@@ -340,18 +318,8 @@ fn runPbkwRoundTrip(s: *std.testing.Smith) !void {
     const allocator = std.testing.allocator;
     const version = s.value(paseto.Version);
     const kind = s.value(paseto.paserk.pbkw.Kind);
-    const ptk_len: usize = switch (version) {
-        .v3 => switch (kind) {
-            .local => 32,
-            .secret => 48,
-        },
-        .v4 => switch (kind) {
-            .local => 32,
-            .secret => 64,
-        },
-    };
-    var ptk: [64]u8 = undefined;
-    s.bytes(ptk[0..ptk_len]);
+    var ptk_buf: [64]u8 = undefined;
+    const ptk = try support.fillValidKeyMaterial(version, kind.toKeyType(), s, &ptk_buf);
     var pw_buf: [32]u8 = undefined;
     const pw = pw_buf[0..s.slice(&pw_buf)];
 
@@ -361,7 +329,7 @@ fn runPbkwRoundTrip(s: *std.testing.Smith) !void {
             s.bytes(&salt);
             var nonce: [16]u8 = undefined;
             s.bytes(&nonce);
-            const wrapped = try paseto.paserk.pbkw.wrapV3(allocator, kind, pw, ptk[0..ptk_len], .{
+            const wrapped = try paseto.paserk.pbkw.wrapV3(allocator, kind, pw, ptk, .{
                 .params = support.PbkwV3FuzzParams,
                 .policy = paseto.paserk.pbkw.Policy.testing,
                 .salt = salt,
@@ -370,14 +338,14 @@ fn runPbkwRoundTrip(s: *std.testing.Smith) !void {
             defer allocator.free(wrapped);
             var out = try paseto.paserk.pbkw.unwrapWithPolicy(allocator, pw, wrapped, .testing);
             defer out.deinit();
-            try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], out.bytes);
+            try std.testing.expectEqualSlices(u8, ptk, out.bytes);
         },
         .v4 => {
             var salt: [16]u8 = undefined;
             s.bytes(&salt);
             var nonce: [24]u8 = undefined;
             s.bytes(&nonce);
-            const wrapped = try paseto.paserk.pbkw.wrapV4(allocator, kind, pw, ptk[0..ptk_len], .{
+            const wrapped = try paseto.paserk.pbkw.wrapV4(allocator, kind, pw, ptk, .{
                 .params = support.PbkwV4FuzzParams,
                 .policy = paseto.paserk.pbkw.Policy.testing,
                 .salt = salt,
@@ -386,7 +354,7 @@ fn runPbkwRoundTrip(s: *std.testing.Smith) !void {
             defer allocator.free(wrapped);
             var out = try paseto.paserk.pbkw.unwrapWithPolicy(allocator, pw, wrapped, .testing);
             defer out.deinit();
-            try std.testing.expectEqualSlices(u8, ptk[0..ptk_len], out.bytes);
+            try std.testing.expectEqualSlices(u8, ptk, out.bytes);
         },
     }
 }

@@ -62,19 +62,9 @@ fn roundTripFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     const kind = s.value(paseto.paserk.pie.Kind);
     const version = s.value(paseto.Version);
-    const ptk_len: usize = switch (version) {
-        .v3 => switch (kind) {
-            .local => 32,
-            .secret => 48,
-        },
-        .v4 => switch (kind) {
-            .local => 32,
-            .secret => 64,
-        },
-    };
 
     var ptk_buf: [64]u8 = undefined;
-    s.bytes(ptk_buf[0..ptk_len]);
+    const ptk = try support.fillValidKeyMaterial(version, kind.toKeyType(), s, &ptk_buf);
 
     var nonce: [32]u8 = undefined;
     s.bytes(&nonce);
@@ -84,7 +74,7 @@ fn roundTripFuzz(_: void, s: *std.testing.Smith) anyerror!void {
         version,
         kind,
         &wrapping,
-        ptk_buf[0..ptk_len],
+        ptk,
         .{ .nonce = nonce },
     );
     defer allocator.free(wrapped);
@@ -94,7 +84,7 @@ fn roundTripFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     try std.testing.expectEqual(version, unwrapped.version);
     try std.testing.expectEqual(kind, unwrapped.kind);
-    try std.testing.expectEqualSlices(u8, ptk_buf[0..ptk_len], unwrapped.bytes);
+    try std.testing.expectEqualSlices(u8, ptk, unwrapped.bytes);
 }
 
 fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
@@ -105,25 +95,15 @@ fn mutationFuzz(_: void, s: *std.testing.Smith) anyerror!void {
 
     const version = s.value(paseto.Version);
     const kind = s.value(paseto.paserk.pie.Kind);
-    const ptk_len: usize = switch (version) {
-        .v3 => switch (kind) {
-            .local => 32,
-            .secret => 48,
-        },
-        .v4 => switch (kind) {
-            .local => 32,
-            .secret => 64,
-        },
-    };
-    var ptk: [64]u8 = undefined;
-    s.bytes(ptk[0..ptk_len]);
+    var ptk_buf: [64]u8 = undefined;
+    const ptk = try support.fillValidKeyMaterial(version, kind.toKeyType(), s, &ptk_buf);
 
     const wrapped = try paseto.paserk.pie.wrap(
         allocator,
         version,
         kind,
         &wrapping,
-        ptk[0..ptk_len],
+        ptk,
         .{},
     );
     defer allocator.free(wrapped);

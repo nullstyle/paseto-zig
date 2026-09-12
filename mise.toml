@@ -1,7 +1,9 @@
 [tools]
 act = "latest"
 zig = "0.16.0"
-"aqua:WebAssembly/binaryen" = "130"
+# The aqua binaryen package lacks linux/arm64 assets; the github backend
+# covers linux (amd64/arm64) and macOS arm64 alike.
+"github:WebAssembly/binaryen" = "version_130"
 deno = "2.9.5"
 
 [tasks.ci]

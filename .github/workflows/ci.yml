@@ -38,7 +38,10 @@ jobs:
         uses: jdx/mise-action@v3
         with:
           cache: true
-          install_args: zig aqua:WebAssembly/binaryen deno
+          # The aqua binaryen package has no linux/arm64 assets; the github
+          # backend downloads the release tarballs directly and covers every
+          # runner in the matrix.
+          install_args: zig github:WebAssembly/binaryen@version_130 deno
 
       - name: Show Zig version
         run: |

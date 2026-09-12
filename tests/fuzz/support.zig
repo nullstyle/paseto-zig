@@ -226,6 +226,62 @@ pub fn deriveDistinctValidV3Public(seed: [48]u8, other_public: [49]u8) !paseto.v
     }
 }
 
+/// Fill `buf` with structurally valid raw PASERK key material for `version`
+/// and `kind`, derived deterministically from Smith bytes, and return the
+/// correctly-sized slice. Random fuzz bytes are almost never valid asymmetric
+/// material (v3 public keys must be on-curve SEC1 points; v4 secret keys must
+/// be seed || matching public key), so round-trip families that feed raw
+/// Smith bytes to the API die in key validation instead of exercising the
+/// round trip. Symmetric local keys accept any bytes and pass through
+/// unmodified.
+pub fn fillValidKeyMaterial(
+    version: paseto.Version,
+    kind: paseto.paserk.KeyType,
+    s: *std.testing.Smith,
+    buf: *[64]u8,
+) ![]const u8 {
+    const len: usize = switch (version) {
+        .v3 => switch (kind) {
+            .local => 32,
+            .public => 49,
+            .secret => 48,
+        },
+        .v4 => switch (kind) {
+            .local => 32,
+            .public => 32,
+            .secret => 64,
+        },
+    };
+    switch (kind) {
+        .local => s.bytes(buf[0..len]),
+        else => switch (version) {
+            .v3 => {
+                var scalar: [48]u8 = undefined;
+                s.bytes(&scalar);
+                const pk = try deriveValidV3Public(scalar);
+                if (kind == .public) {
+                    @memcpy(buf[0..len], &pk.publicCompressed());
+                } else {
+                    const secret = pk.secretBytes() orelse return error.NoSecretKey;
+                    @memcpy(buf[0..len], &secret);
+                }
+            },
+            .v4 => {
+                var seed: [32]u8 = undefined;
+                s.bytes(&seed);
+                const pk = try paseto.v4.Public.fromSeed(&seed);
+                if (kind == .public) {
+                    @memcpy(buf[0..len], &pk.publicKeyBytes());
+                } else {
+                    const secret = pk.secretKeyBytes() orelse return error.NoSecretKey;
+                    @memcpy(buf[0..len], &secret);
+                }
+            },
+        },
+    }
+    return buf[0..len];
+}
+
 fn bumpScalar(candidate: *[48]u8) void {
     var i = candidate.len;
     while (i > 0) {
